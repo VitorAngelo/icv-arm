@@ -1,0 +1,4 @@
+dot_scalar.c:9:23: optimized: loop vectorized using 16 byte vectors
+dot_scalar.c:27:23: optimized: loop vectorized using 16 byte vectors
+dot_scalar.c:18:23: optimized: loop vectorized using 16 byte vectors
+dot_scalar.c:9:23: optimized: loop vectorized using 16 byte vectors
