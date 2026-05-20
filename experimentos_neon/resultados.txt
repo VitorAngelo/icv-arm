@@ -1,0 +1,97 @@
+RESULTADOS — EXPERIMENTOS NEON / PI 4 (Cortex-A72)
+====================================================
+Placa: Raspberry Pi 4 — aarch64 — Kernel 6.12.47
+Compilador: gcc -O2 -march=armv8-a+simd -lpthread
+
+
+MOTIVACAO
+---------
+Na ultima reuniao, o senhor explicou que fixou a medicao num unico nucleo
+porque o Orange Pi do Guilherme tem nucleos heterogeneos. Isso levantou
+uma pergunta: o Pi 4 e homogeneo empiricamente, ou so em especificacao?
+A partir dessa pergunta defini os tres experimentos abaixo.
+
+
+EXPERIMENTO 1 — HOMOGENEIDADE DOS NUCLEOS
+------------------------------------------
+Comando: ./homogeneidade 0 16
+
+  nucleo ; scalar_ns ; neon_ns ; speedup
+  0      ;     62462 ;   13334 ;    4.68
+  1      ;     60870 ;   13222 ;    4.60
+  2      ;     34075 ;    7314 ;    4.66
+  3      ;     32963 ;    7222 ;    4.56
+
+  variancia NEON relativa ao nucleo 0:
+    nucleo 1: -0.8%
+    nucleo 2: -45.1%
+    nucleo 3: -45.8%
+
+Nucleos 0 e 1 sao equivalentes. Nucleos 2 e 3 foram 45% mais rapidos,
+o que e inesperado para hardware homogeneo. A hipotese e throttling
+termico nos nucleos 0 e 1, que tinham mais carga acumulada no momento
+da medicao. Isso confirma que fixar o nucleo e necessario tambem no
+Pi 4, nao so no Orange Pi do Guilherme.
+
+Duvida: como isolar se a assimetria e termica ou estrutural? Pensei em
+repetir medindo a temperatura por nucleo com vcgencmd durante o teste.
+
+
+EXPERIMENTO 2 — EFEITO DA ORDEM DE MEDICAO
+-------------------------------------------
+Motivacao: o codigo base mede sempre i8 -> i32 -> f32 em sequencia.
+O i32 pode estar se beneficiando do cache aquecido pelo i8, subestimando
+o tempo real.
+
+Metodo: medir cada tipo frio (pos-flush) e imediatamente quente,
+reportando o ratio frio/quente. Quanto maior o ratio, mais o cache
+estava ajudando — e mais a medicao original estava contaminada.
+
+  klen=16kb — i8 no L1D, i32/f32 no L2:
+    i8  : ratio 1.17
+    i32 : ratio 1.46
+    f32 : ratio 1.25
+
+  klen=256kb — i8 no L2, i32/f32 na DRAM:
+    i8  : ratio 1.01
+    i32 : ratio 1.11
+    f32 : ratio 0.99
+
+  klen=2048kb — todos na DRAM:
+    i8  : ratio 1.01
+    i32 : ratio 1.03
+    f32 : ratio 1.03
+
+Com klen=16kb, medir o i32 depois do i8 reduzia o tempo em 31%.
+A partir do momento em que os dados vao para a DRAM, o ratio cai
+para ~1.0 e a ordem deixa de importar.
+
+Duvida: para os tamanhos usados na pesquisa, esse efeito e relevante
+o suficiente para mudar a metodologia de medicao?
+
+
+EXPERIMENTO 3 — SPEEDUP DO NEON POR REGIME DE MEMORIA
+------------------------------------------------------
+Motivacao: o objetivo da pesquisa e usar o Pi 4 para otimizar
+inferencia de redes neurais. Queria entender se o speedup do NEON
+se mantem quando os dados nao cabem no cache.
+
+Rodei o mesmo dot product escalar e NEON variando o tamanho do vetor
+de 1KB ate 4MB. Cada tamanho cai num regime diferente de memoria.
+
+  regiao ; speedup
+  L1D    ; 5 a 6x
+  L2     ; 5.6 a 5.9x
+  DRAM   ; 2.3x
+
+O speedup cai bastante quando o dado vai para a DRAM. Minha interpretacao
+e que nesse regime a memoria vira o gargalo e o NEON deixa de ajudar —
+mas nao tenho certeza se essa e a leitura correta.
+
+Duvidas para a reuniao:
+- Essa queda de speedup na DRAM significa que camadas com pesos grandes
+  nao vao se beneficiar plenamente do NEON na inferencia?
+- Se sim, tecnicas como tiling ou quantizacao seriam o caminho para
+  manter os dados no cache e recuperar o speedup?
+- Faz sentido repetir esse sweep no Orange Pi do Guilherme para
+  comparar como o RISC-V se comporta na mesma progressao?
