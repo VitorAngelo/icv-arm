@@ -1,32 +1,13 @@
 /*
- * homogeneidade_v2.c
+ * homogeneidade_simples.c
  *
- * Mede se os 4 nucleos Cortex-A72 do Pi 4 sao homogeneos na pratica,
- * separando o efeito de NUCLEO do efeito de POSICAO na sequencia de medicao.
- *
- * Correcoes em relacao a versao anterior:
- *   - A ordem dos nucleos e sorteada a cada trial (counterbalancing completo
- *     das 24 permutacoes), entao efeito de tempo / temperatura / rampa de
- *     frequencia nao fica confundido com efeito de nucleo.
- *   - 10000 trials => 10000 amostras por nucleo => mediana, desvio, percentis.
- *   - Cache despejado antes de cada medicao (metodo do professor): cada amostra
- *     comeca fria. Isso torna a medicao limitada por memoria, nao por compute,
- *     mas com a ordem sorteada e 10000 trials o efeito do flush se distribui
- *     igualmente entre nucleos e posicoes, mantendo a comparacao relativa justa.
- *
- * Nao trava frequencia de proposito: a ordem sorteada distribui qualquer rampa
- * de DVFS ou deriva termica igualmente entre nucleos e posicoes, entao o spread
- * entre nucleos nao fica enviesado. O custo e variancia um pouco maior, sem vies.
- *
- * Compilar:
- *   gcc -O2 -march=armv8-a+simd homogeneidade_v2.c -lpthread -lm -o homogeneidade_v2
- *
- * Uso:
- *   ./homogeneidade_v2 [tamanho_kb] [trials] [seed] > dados.csv
- *   ./homogeneidade_v2 16 10000 1 > dados.csv
- *
- * stdout : CSV (trial,position,core,scalar_ns,neon_ns) para o grafico
- * stderr : resumo estatistico por nucleo e por posicao + veredito
+ * Experimento desenvolvido a partir do experimento anterior (homogeneidade_v2.c)
+ * e do codigo de referencia dot.c, incorporando o feedback recebido sobre
+ * metodologia de medicao: warmup antes de cronometrar, loop de multiplas
+ * execucoes dentro de um unico intervalo e divisao pelo numero de runs.
+ * Objetivo: medir homogeneidade entre os 4 nucleos do Cortex-A72 com
+ * maior rigor, cobrindo tres tipos de dado (int8, int32, float32)
+ * em kernels scalar e NEON.
  */
 
 #define _GNU_SOURCE
@@ -41,34 +22,82 @@
 #include <arm_neon.h>
 
 #define NCORES 4
-#define NPERM  24                    /* 4! */
-#define FLUSH_SZ (2 * 1024 * 1024)   /* maior que o L2 (1 MB) do Pi 4 */
 
-/* ---------- kernels ---------- */
+/* --- kernels escalares (baseados em dot.c) --- */
 
-int32_t dot_scalar_i8(const int8_t *a, const int8_t *b, int len)
+static int32_t dot_i8(const int8_t *a, const int8_t *b, int len)
 {
-    int32_t ret = 0;
+    int32_t acc = 0;
     for (int i = 0; i < len; i++)
-        ret += a[i] * b[i];
-    return ret;
+        acc += (int32_t)a[i] * (int32_t)b[i];
+    return acc;
 }
 
-int32_t dot_neon_i8(const int8_t *a, const int8_t *b, int len)
+static int32_t dot_i32(const int32_t *a, const int32_t *b, int len)
+{
+    int32_t acc = 0;
+    for (int i = 0; i < len; i++)
+        acc += a[i] * b[i];
+    return acc;
+}
+
+static float dot_f32(const float *a, const float *b, int len)
+{
+    float acc = 0.0f;
+    for (int i = 0; i < len; i++)
+        acc += a[i] * b[i];
+    return acc;
+}
+
+/*
+ * Kernels NEON (novos).
+ * int8: vmull_s8 produz int16x8 a partir de 8 pares int8;
+ * vpadalq_s16 soma pares adjacentes e acumula em int32x4.
+ * 16 elementos por iteracao. len deve ser multiplo de 16.
+ */
+static int32_t neon_dot_i8(const int8_t *a, const int8_t *b, int len)
 {
     int32x4_t acc = vdupq_n_s32(0);
     for (int i = 0; i < len; i += 16) {
-        int8x16_t va = vld1q_s8(&a[i]);
-        int8x16_t vb = vld1q_s8(&b[i]);
+        int8x16_t va = vld1q_s8(a + i);
+        int8x16_t vb = vld1q_s8(b + i);
         acc = vpadalq_s16(acc, vmull_s8(vget_low_s8(va),  vget_low_s8(vb)));
         acc = vpadalq_s16(acc, vmull_s8(vget_high_s8(va), vget_high_s8(vb)));
     }
     int32x2_t s = vadd_s32(vget_low_s32(acc), vget_high_s32(acc));
-    s = vpadd_s32(s, s);
-    return vget_lane_s32(s, 0);
+    return vget_lane_s32(vpadd_s32(s, s), 0);
 }
 
-void core_affinity(int core_id)
+/*
+ * int32: vmlaq_s32 faz multiply-accumulate de 4 elementos por iteracao.
+ * len deve ser multiplo de 4.
+ */
+static int32_t neon_dot_i32(const int32_t *a, const int32_t *b, int len)
+{
+    int32x4_t acc = vdupq_n_s32(0);
+    for (int i = 0; i < len; i += 4) {
+        acc = vmlaq_s32(acc, vld1q_s32(a + i), vld1q_s32(b + i));
+    }
+    int32x2_t s = vadd_s32(vget_low_s32(acc), vget_high_s32(acc));
+    return vget_lane_s32(vpadd_s32(s, s), 0);
+}
+
+/*
+ * float32: vmlaq_f32 faz multiply-accumulate de 4 floats por iteracao.
+ * len deve ser multiplo de 4.
+ */
+static float neon_dot_f32(const float *a, const float *b, int len)
+{
+    float32x4_t acc = vdupq_n_f32(0.0f);
+    for (int i = 0; i < len; i += 4) {
+        acc = vmlaq_f32(acc, vld1q_f32(a + i), vld1q_f32(b + i));
+    }
+    float32x2_t s = vadd_f32(vget_low_f32(acc), vget_high_f32(acc));
+    return vget_lane_f32(vpadd_f32(s, s), 0);
+}
+
+/* Afinidade de nucleo: baseada em dot.c. */
+static void core_affinity(int core_id)
 {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
@@ -77,207 +106,187 @@ void core_affinity(int core_id)
         perror("pthread_setaffinity_np failed");
         exit(1);
     }
-    sched_yield();
 }
 
-void despejar_cache(void)
+/* Estatistica simples (nova): media e mediana por nucleo. */
+static double media(const long long *v, int n)
 {
-    static volatile uint8_t buf[FLUSH_SZ];
-    volatile uint64_t s = 0;
-    for (int i = 0; i < FLUSH_SZ; i++) s += buf[i];
-    (void)s;
+    double s = 0.0;
+    for (int i = 0; i < n; i++) s += (double)v[i];
+    return s / n;
 }
 
-/* ---------- permutacoes (Heap) ---------- */
-
-static int perms[NPERM][NCORES];
-static int nperm = 0;
-
-static void gen_perms(int *arr, int k)
+static int cmp_ll(const void *x, const void *y)
 {
-    if (k == 1) {
-        memcpy(perms[nperm++], arr, NCORES * sizeof(int));
-        return;
-    }
-    for (int i = 0; i < k; i++) {
-        gen_perms(arr, k - 1);
-        if (k % 2 == 0) { int t = arr[i];   arr[i]   = arr[k-1]; arr[k-1] = t; }
-        else            { int t = arr[0];   arr[0]   = arr[k-1]; arr[k-1] = t; }
-    }
-}
-
-/* ---------- estatistica ---------- */
-
-typedef struct { double mean, sd, median, p05, p95; long long min; } Stat;
-
-static int cmpll(const void *x, const void *y)
-{
-    long long a = *(const long long *)x, b = *(const long long *)y;
+    long long a = *(const long long *)x;
+    long long b = *(const long long *)y;
     return (a > b) - (a < b);
 }
 
-static Stat compute(const long long *src, int n)
+static double mediana(long long *v, int n)
 {
-    long long *t = malloc((size_t)n * sizeof(long long));
-    memcpy(t, src, (size_t)n * sizeof(long long));
-
-    double s = 0.0;
-    for (int i = 0; i < n; i++) s += (double)t[i];
-    double m = s / n;
-    double v = 0.0;
-    for (int i = 0; i < n; i++) { double d = (double)t[i] - m; v += d * d; }
-
-    qsort(t, n, sizeof(long long), cmpll);
-
-    Stat st;
-    st.mean   = m;
-    st.sd     = sqrt(v / n);
-    st.min    = t[0];
-    st.median = (double)t[n / 2];
-    st.p05    = (double)t[(int)(0.05 * n)];
-    st.p95    = (double)t[(int)(0.95 * n)];
-    free(t);
-    return st;
-}
-
-/* ---------- grafico ascii ---------- */
-
-static void barra(const char *rotulo, double val, double maxv, int width)
-{
-    int n = (maxv > 0.0) ? (int)(val / maxv * width + 0.5) : 0;
-    fprintf(stderr, "  %-6s |", rotulo);
-    for (int i = 0; i < n; i++)      fputc('#', stderr);
-    for (int i = n; i < width; i++)  fputc(' ', stderr);
-    fprintf(stderr, "| %.0f ns\n", val);
+    long long *tmp = malloc((size_t)n * sizeof(long long));
+    memcpy(tmp, v, (size_t)n * sizeof(long long));
+    qsort(tmp, (size_t)n, sizeof(long long), cmp_ll);
+    double med = (double)tmp[n / 2];
+    free(tmp);
+    return med;
 }
 
 int main(int argc, char *argv[])
 {
     int kb     = (argc > 1) ? atoi(argv[1]) : 16;
-    int trials = (argc > 2) ? atoi(argv[2]) : 10000;
-    int seed   = (argc > 3) ? atoi(argv[3]) : 1;
-    int klen   = kb * 1024;                 /* multiplo de 16 e de 64 */
+    int runs   = (argc > 2) ? atoi(argv[2]) : 100;
+    int trials = (argc > 3) ? atoi(argv[3]) : 500;
+    int seed   = (argc > 4) ? atoi(argv[4]) : 1;
 
+    if (runs < 1) runs = 1;
+    int klen = kb * 1024;
     srand((unsigned)seed);
 
-    /* gera as 24 permutacoes */
-    int base[NCORES] = {0, 1, 2, 3};
-    gen_perms(base, NCORES);
+    fprintf(stderr, "kb=%d  klen=%d  runs=%d  trials=%d  seed=%d\n",
+            kb, klen, runs, trials, seed);
+    fprintf(stderr, "Cada medicao = %d execucoes cronometradas juntas, depois /runs.\n", runs);
+    fprintf(stderr, "Nucleo sorteado aleatoriamente (rand() %% 4) a cada trial.\n\n");
 
-    /* schedule balanceado: cada permutacao ~trials/24 vezes, depois embaralha */
-    int *permidx = malloc((size_t)trials * sizeof(int));
-    for (int t = 0; t < trials; t++) permidx[t] = t % NPERM;
-    for (int t = trials - 1; t > 0; t--) {      /* Fisher-Yates */
-        int j = rand() % (t + 1);
-        int tmp = permidx[t]; permidx[t] = permidx[j]; permidx[j] = tmp;
+    int8_t  *ai8  = aligned_alloc(64, (size_t)klen);
+    int8_t  *bi8  = aligned_alloc(64, (size_t)klen);
+    int32_t *ai32 = aligned_alloc(64, (size_t)klen * sizeof(int32_t));
+    int32_t *bi32 = aligned_alloc(64, (size_t)klen * sizeof(int32_t));
+    float   *af   = aligned_alloc(64, (size_t)klen * sizeof(float));
+    float   *bf   = aligned_alloc(64, (size_t)klen * sizeof(float));
+
+    if (!ai8 || !bi8 || !ai32 || !bi32 || !af || !bf) { perror("alloc"); return 1; }
+
+    for (int i = 0; i < klen; i++) {
+        ai8[i]  = (int8_t)(rand() & 0xFF);
+        bi8[i]  = (int8_t)(rand() & 0xFF);
+        ai32[i] = (int32_t)ai8[i];
+        bi32[i] = (int32_t)bi8[i];
+        af[i]   = (float)ai8[i];
+        bf[i]   = (float)bi8[i];
     }
 
-    /* amostras: cada nucleo e cada posicao aparecem 1x por trial => trials amostras */
-    long long *neon_core[NCORES], *scal_core[NCORES];
-    long long *neon_pos[NCORES],  *scal_pos[NCORES];
-    for (int i = 0; i < NCORES; i++) {
-        neon_core[i] = malloc((size_t)trials * sizeof(long long));
-        scal_core[i] = malloc((size_t)trials * sizeof(long long));
-        neon_pos[i]  = malloc((size_t)trials * sizeof(long long));
-        scal_pos[i]  = malloc((size_t)trials * sizeof(long long));
-    }
+    long long *s_i8[NCORES],  *n_i8[NCORES];
+    long long *s_i32[NCORES], *n_i32[NCORES];
+    long long *s_f32[NCORES], *n_f32[NCORES];
+    int count[NCORES];
+    memset(count, 0, sizeof(count));
 
-    int8_t *a = aligned_alloc(64, klen);
-    int8_t *b = aligned_alloc(64, klen);
-    if (!a || !b) { perror("alloc"); return 1; }
-    for (int i = 0; i < klen; i++) { a[i] = rand(); b[i] = rand(); }
-
-    fprintf(stderr,
-        "kb=%d  klen=%d  working_set=%dkb  L1D=32kb  trials=%d  perms=%d (~%d cada)\n",
-        kb, klen, (2 * klen) / 1024, trials, NPERM, trials / NPERM);
-    fprintf(stderr, "metodo: flush de cache antes de cada medicao (frio).\n\n");
-
-    printf("trial,position,core,scalar_ns,neon_ns\n");
-
-    struct timespec t1, t2, t3;
-    volatile int32_t sink = 0;
-
-    for (int t = 0; t < trials; t++) {
-        int *order = perms[permidx[t]];
-        for (int pos = 0; pos < NCORES; pos++) {
-            int core = order[pos];
-            core_affinity(core);
-            despejar_cache();      /* metodo do professor: mede frio */
-
-            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t1);
-            sink += dot_scalar_i8(a, b, klen);
-            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t2);
-            sink += dot_neon_i8(a, b, klen);
-            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t3);
-
-            long long ns_s = (t2.tv_sec - t1.tv_sec) * 1000000000LL + (t2.tv_nsec - t1.tv_nsec);
-            long long ns_n = (t3.tv_sec - t2.tv_sec) * 1000000000LL + (t3.tv_nsec - t2.tv_nsec);
-
-            scal_core[core][t] = ns_s;   neon_core[core][t] = ns_n;
-            scal_pos[pos][t]   = ns_s;   neon_pos[pos][t]   = ns_n;
-
-            printf("%d,%d,%d,%lld,%lld\n", t, pos, core, ns_s, ns_n);
+    for (int c = 0; c < NCORES; c++) {
+        s_i8[c]  = malloc((size_t)trials * sizeof(long long));
+        n_i8[c]  = malloc((size_t)trials * sizeof(long long));
+        s_i32[c] = malloc((size_t)trials * sizeof(long long));
+        n_i32[c] = malloc((size_t)trials * sizeof(long long));
+        s_f32[c] = malloc((size_t)trials * sizeof(long long));
+        n_f32[c] = malloc((size_t)trials * sizeof(long long));
+        if (!s_i8[c] || !n_i8[c] || !s_i32[c] || !n_i32[c] || !s_f32[c] || !n_f32[c]) {
+            perror("malloc"); return 1;
         }
     }
-    (void)sink;
 
-    /* ---------- resumo ---------- */
-    Stat sc[NCORES], sp[NCORES];
-    for (int c = 0; c < NCORES; c++) sc[c] = compute(neon_core[c], trials);
-    for (int p = 0; p < NCORES; p++) sp[p] = compute(neon_pos[p], trials);
+    printf("trial,core,si8_ns,ni8_ns,si32_ns,ni32_ns,sf32_ns,nf32_ns\n");
 
-    fprintf(stderr, "POR NUCLEO (NEON, ns)\n");
-    fprintf(stderr, "core ; mean ; median ; sd ; min ; p05 ; p95\n");
-    for (int c = 0; c < NCORES; c++)
-        fprintf(stderr, "%d ; %.0f ; %.0f ; %.0f ; %lld ; %.0f ; %.0f\n",
-                c, sc[c].mean, sc[c].median, sc[c].sd, sc[c].min, sc[c].p05, sc[c].p95);
+    struct timespec t1, t2;
+    volatile int32_t sink_i = 0;
+    volatile float   sink_f = 0.0f;
 
-    fprintf(stderr, "\nPOR POSICAO DE MEDICAO (NEON, ns)  [1a, 2a, 3a, 4a medida do trial]\n");
-    fprintf(stderr, "pos ; mean ; median ; sd ; min ; p05 ; p95\n");
-    for (int p = 0; p < NCORES; p++)
-        fprintf(stderr, "%d ; %.0f ; %.0f ; %.0f ; %lld ; %.0f ; %.0f\n",
-                p, sp[p].mean, sp[p].median, sp[p].sd, sp[p].min, sp[p].p05, sp[p].p95);
+    for (int t = 0; t < trials; t++) {
+        int core = rand() % NCORES;
+        core_affinity(core);
 
-    /* spread sobre a mediana (robusta a outlier de escalonador) */
-    double cmin = sc[0].median, cmax = sc[0].median;
-    double pmin = sp[0].median, pmax = sp[0].median;
-    for (int i = 1; i < NCORES; i++) {
-        if (sc[i].median < cmin) cmin = sc[i].median;
-        if (sc[i].median > cmax) cmax = sc[i].median;
-        if (sp[i].median < pmin) pmin = sp[i].median;
-        if (sp[i].median > pmax) pmax = sp[i].median;
+        long long ns_si8, ns_ni8, ns_si32, ns_ni32, ns_sf32, ns_nf32;
+
+        sink_i += dot_i8(ai8, bi8, klen);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);
+        for (int r = 0; r < runs; r++) sink_i += dot_i8(ai8, bi8, klen);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t2);
+        ns_si8 = ((t2.tv_sec - t1.tv_sec) * 1000000000LL + (t2.tv_nsec - t1.tv_nsec)) / runs;
+
+        sink_i += neon_dot_i8(ai8, bi8, klen);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);
+        for (int r = 0; r < runs; r++) sink_i += neon_dot_i8(ai8, bi8, klen);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t2);
+        ns_ni8 = ((t2.tv_sec - t1.tv_sec) * 1000000000LL + (t2.tv_nsec - t1.tv_nsec)) / runs;
+
+        sink_i += dot_i32(ai32, bi32, klen);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);
+        for (int r = 0; r < runs; r++) sink_i += dot_i32(ai32, bi32, klen);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t2);
+        ns_si32 = ((t2.tv_sec - t1.tv_sec) * 1000000000LL + (t2.tv_nsec - t1.tv_nsec)) / runs;
+
+        sink_i += neon_dot_i32(ai32, bi32, klen);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);
+        for (int r = 0; r < runs; r++) sink_i += neon_dot_i32(ai32, bi32, klen);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t2);
+        ns_ni32 = ((t2.tv_sec - t1.tv_sec) * 1000000000LL + (t2.tv_nsec - t1.tv_nsec)) / runs;
+
+        sink_f += dot_f32(af, bf, klen);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);
+        for (int r = 0; r < runs; r++) sink_f += dot_f32(af, bf, klen);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t2);
+        ns_sf32 = ((t2.tv_sec - t1.tv_sec) * 1000000000LL + (t2.tv_nsec - t1.tv_nsec)) / runs;
+
+        sink_f += neon_dot_f32(af, bf, klen);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t1);
+        for (int r = 0; r < runs; r++) sink_f += neon_dot_f32(af, bf, klen);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t2);
+        ns_nf32 = ((t2.tv_sec - t1.tv_sec) * 1000000000LL + (t2.tv_nsec - t1.tv_nsec)) / runs;
+
+        int idx = count[core]++;
+        s_i8[core][idx]  = ns_si8;   n_i8[core][idx]  = ns_ni8;
+        s_i32[core][idx] = ns_si32;  n_i32[core][idx] = ns_ni32;
+        s_f32[core][idx] = ns_sf32;  n_f32[core][idx] = ns_nf32;
+
+        printf("%d,%d,%lld,%lld,%lld,%lld,%lld,%lld\n",
+               t, core, ns_si8, ns_ni8, ns_si32, ns_ni32, ns_sf32, ns_nf32);
     }
-    double spread_core = (cmax - cmin) / cmin * 100.0;
-    double spread_pos  = (pmax - pmin) / pmin * 100.0;
 
-    /* ---------- grafico ascii (mediana) ---------- */
-    double maxv = (cmax > pmax) ? cmax : pmax;   /* mesma escala nos dois */
-    char rot[8];
+    (void)sink_i; (void)sink_f;
 
-    fprintf(stderr, "\nNEON por nucleo (mediana)\n");
+    fprintf(stderr, "\n%-8s %4s | %14s %14s | %14s %14s | %14s %14s\n",
+            "nucleo", "n",
+            "si8(med/med)", "ni8(med/med)",
+            "si32(med/med)", "ni32(med/med)",
+            "sf32(med/med)", "nf32(med/med)");
+    fprintf(stderr, "---------|-----|----------------|----------------|----------------|----------------\n");
+
     for (int c = 0; c < NCORES; c++) {
-        snprintf(rot, sizeof(rot), "core%d", c);
-        barra(rot, sc[c].median, maxv, 50);
+        int n = count[c];
+        if (n == 0) { fprintf(stderr, "core%d: sem amostras.\n", c); continue; }
+        fprintf(stderr,
+            "core%-4d %4d | %6.0f/%-6.0f  %6.0f/%-6.0f | %6.0f/%-6.0f  %6.0f/%-6.0f | %6.0f/%-6.0f  %6.0f/%-6.0f\n",
+            c, n,
+            media(s_i8[c], n),  mediana(s_i8[c], n),
+            media(n_i8[c], n),  mediana(n_i8[c], n),
+            media(s_i32[c], n), mediana(s_i32[c], n),
+            media(n_i32[c], n), mediana(n_i32[c], n),
+            media(s_f32[c], n), mediana(s_f32[c], n),
+            media(n_f32[c], n), mediana(n_f32[c], n));
     }
 
-    fprintf(stderr, "\nNEON por posicao de medicao (mediana)\n");
-    for (int p = 0; p < NCORES; p++) {
-        snprintf(rot, sizeof(rot), "%da", p + 1);
-        barra(rot, sp[p].median, maxv, 50);
+    double mn_min = 1e18, mn_max = 0.0;
+    for (int c = 0; c < NCORES; c++) {
+        if (count[c] == 0) continue;
+        double m = mediana(n_i8[c], count[c]);
+        if (m < mn_min) mn_min = m;
+        if (m > mn_max) mn_max = m;
     }
-
-    fprintf(stderr, "\nVEREDITO (NEON, sobre mediana)\n");
-    fprintf(stderr, "  spread entre nucleos  : %.1f%%\n", spread_core);
-    fprintf(stderr, "  spread entre posicoes : %.1f%%\n", spread_pos);
-    if (spread_pos > spread_core)
-        fprintf(stderr, "  -> a variacao segue a POSICAO, nao o nucleo. Assimetria e artefato de ordem.\n");
+    double spread = (mn_max - mn_min) / mn_min * 100.0;
+    fprintf(stderr, "\nSpread de mediana NEON i8 entre nucleos: %.1f%%\n", spread);
+    if (spread < 5.0)
+        fprintf(stderr, "-> Nucleos homogeneos (spread < 5%%).\n");
     else
-        fprintf(stderr, "  -> a variacao segue o NUCLEO mesmo com ordem sorteada. Assimetria pode ser real.\n");
+        fprintf(stderr, "-> Assimetria detectada (spread >= 5%%).\n"
+                        "   Sem counterbalancing, pode ser artefato de DVFS/ordem.\n");
 
-    for (int i = 0; i < NCORES; i++) {
-        free(neon_core[i]); free(scal_core[i]);
-        free(neon_pos[i]);  free(scal_pos[i]);
+    for (int c = 0; c < NCORES; c++) {
+        free(s_i8[c]);  free(n_i8[c]);
+        free(s_i32[c]); free(n_i32[c]);
+        free(s_f32[c]); free(n_f32[c]);
     }
-    free(permidx); free(a); free(b);
+    free(ai8); free(bi8);
+    free(ai32); free(bi32);
+    free(af); free(bf);
     return 0;
 }
