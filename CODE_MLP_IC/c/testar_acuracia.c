@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <math.h>
-#include "pesos.h" // Atualizado: lê da mesma pasta
+#include "pesos.h" 
 
 #define ENTRADAS 784
 #define OCULTA 64
@@ -44,8 +44,8 @@ int prever_float(const float *entrada) {
     return classe;
 }
 
-// Inferência 2: Int8 com acumulador Int32 (Otimizada)
-int prever_int8(const float *entrada) {
+// Inferência 2: Int8 Puro (Simulação Estrita ARM sem FPU)
+int prever_int8_puro(const float *entrada) {
     int8_t x_q[ENTRADAS], h_q[OCULTA];
     int32_t logits[SAIDAS];
 
@@ -55,14 +55,23 @@ int prever_int8(const float *entrada) {
     }
     for (int j = 0; j < OCULTA; j++) {
         int32_t soma = b0_int32[j];
-        for (int i = 0; i < ENTRADAS; i++) soma += (int32_t)x_q[i] * (int32_t)W0_q[i * OCULTA + j];
+        for (int i = 0; i < ENTRADAS; i++) {
+            // ==============================================================================
+            // CORRECAO PRODUTO LINEAR: MAC forçado em int8_t e acumulado em int32_t
+            // ==============================================================================
+            soma += (int32_t)( (int8_t)x_q[i] * (int8_t)W0_q[i * OCULTA + j] );
+        }
         float z1 = (float)soma * (s_x * s_W0);
         h_q[j] = quantizar((z1 > 0.0f) ? z1 : 0.0f, s_h);
     }
     for (int j = 0; j < SAIDAS; j++) {
-        int32_t soma = b1_int32[j];
-        for (int i = 0; i < OCULTA; i++) soma += (int32_t)h_q[i] * (int32_t)W1_q[i * SAIDAS + j];
-        logits[j] = soma;
+        logits[j] = b1_int32[j];
+        for (int i = 0; i < OCULTA; i++) {
+            // ==============================================================================
+            // CORRECAO PRODUTO LINEAR: MAC forçado em int8_t e acumulado em int32_t
+            // ==============================================================================
+            logits[j] += (int32_t)( (int8_t)h_q[i] * (int8_t)W1_q[i * SAIDAS + j] );
+        }
     }
 
     int classe = 0;
@@ -79,7 +88,6 @@ int main() {
     float *X_te = (float *)malloc(TEST_SIZE * ENTRADAS * sizeof(float));
     int32_t *y_te = (int32_t *)malloc(TEST_SIZE * sizeof(int32_t));
 
-    // Atualizado: Lê direto da pasta atual
     FILE *f_X = fopen("X_te.bin", "rb");
     FILE *f_y = fopen("y_te.bin", "rb");
 
@@ -95,7 +103,7 @@ int main() {
     fclose(f_y);
 
     int acertos_float = 0;
-    int acertos_int8 = 0;
+    int acertos_int8_puro = 0;
     int divergencias = 0;
     
     int matriz_confusao[SAIDAS][SAIDAS] = {0}; 
@@ -106,25 +114,25 @@ int main() {
         const float *imagem_atual = &X_te[i * ENTRADAS];
         
         int pred_f = prever_float(imagem_atual);
-        int pred_q = prever_int8(imagem_atual);
+        int pred_q_puro = prever_int8_puro(imagem_atual);
         int real = y_te[i];
 
         if (pred_f == real) acertos_float++;
-        if (pred_q == real) acertos_int8++;
-        if (pred_f != pred_q) divergencias++;
+        if (pred_q_puro == real) acertos_int8_puro++;
+        if (pred_f != pred_q_puro) divergencias++;
 
-        matriz_confusao[real][pred_q]++;
+        matriz_confusao[real][pred_q_puro]++;
     }
 
     printf("\n======================================================\n");
-    printf("                RELATORIO DE VALIDACAO C              \n");
+    printf("     RELATORIO DE VALIDACAO C - SIMULACAO ARM NEON    \n");
     printf("======================================================\n");
     printf("Total de Amostras Testadas: %d\n", TEST_SIZE);
     printf("Acuracia Float32 (Referencia) : %.4f\n", (float)acertos_float / TEST_SIZE);
-    printf("Acuracia Int8 (Otimizada)     : %.4f\n", (float)acertos_int8 / TEST_SIZE);
-    printf("Decisoes Alteradas (Float vs Int8): %d / %d\n", divergencias, TEST_SIZE);
+    printf("Acuracia Int8 Puro (NEON SIM) : %.4f\n", (float)acertos_int8_puro / TEST_SIZE);
+    printf("Decisoes Alteradas (Float vs Int8 Puro): %d / %d\n", divergencias, TEST_SIZE);
     
-    printf("\n==== MATRIZ DE CONFUSAO (INT8 em C) ====\n");
+    printf("\n==== MATRIZ DE CONFUSAO (INT8 PURO em C) ====\n");
     printf("   |    0    1    2    3    4    5    6    7    8    9\n");
     printf("---+--------------------------------------------------\n");
     for(int i = 0; i < SAIDAS; i++) {
