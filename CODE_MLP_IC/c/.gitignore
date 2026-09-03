@@ -1,1 +1,8 @@
-01_float
+*
+!*.c
+!*.h
+!*.sh
+!*.bin
+!Makefile
+!.gitignore
+!*.txt

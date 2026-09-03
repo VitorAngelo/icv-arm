@@ -1,0 +1,14 @@
+>>> 01. Inferencia FLOAT32 (Referencia)
+Classe prevista: 1
+
+>>> 02. Inferencia INT32 (Com Float Hibrido)
+Classe prevista: 1
+
+>>> 03. Inferencia INT8 (Com Float Hibrido)
+Classe prevista: 1
+
+>>> 04. Inferencia INT32 PURO (Simulacao de Hardware)
+Classe prevista: 1
+
+>>> 05. Inferencia INT8 PURO (Simulacao Estrita ARM)
+Classe prevista: 1
