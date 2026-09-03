@@ -51,6 +51,7 @@ int prever_int8_puro(const float *entrada) {
 
     for (int i = 0; i < ENTRADAS; i++) {
         float xs = (scaler_scale[i] != 0.0f) ? (entrada[i] - scaler_mean[i]) / scaler_scale[i] : 0.0f;
+        // FIXME: é isso que tem que ser exportado (as imagens tem que ser quantizadas):
         x_q[i] = quantizar(xs, s_x);
     }
     for (int j = 0; j < OCULTA; j++) {
@@ -59,8 +60,15 @@ int prever_int8_puro(const float *entrada) {
             // ==============================================================================
             // CORRECAO PRODUTO LINEAR: MAC forçado em int8_t e acumulado em int32_t
             // ==============================================================================
+            // TODO: OK, W0_q já está em int8! Ou seja, não precisa dos casts (o que não pode
+            // é ter os casts para int32, igual o outro código)
             soma += (int32_t)( (int8_t)x_q[i] * (int8_t)W0_q[i * OCULTA + j] );
         }
+        // FIXME: não pode voltar para float:
+        // cada neurônio tem pesos int8, as entradas (pixels) int8, acumula em (?) int32, mas
+        // pode ser menos (para o PC pode deixar 32), aplica a função de ativação (p.ex. relu)
+        // que vai ter saída int8.
+        // Resumindo: na inferencia não pode ter nada de float
         float z1 = (float)soma * (s_x * s_W0);
         h_q[j] = quantizar((z1 > 0.0f) ? z1 : 0.0f, s_h);
     }
