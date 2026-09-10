@@ -1,5 +1,0 @@
-dot_i8_ref.o           0 instrucoes NEON
-dot_i8_neon.o           1 add  2 addp  3 mov  2 movi  2 sadalp  2 smull 
-mlp_int8_escalar.o     0 instrucoes NEON
-mlp_int8_autovet.o      2 addv  2 movi  4 saddw  4 saddw2  2 smull  2 smull2 
-mlp_int8_neon.o        0 instrucoes NEON
