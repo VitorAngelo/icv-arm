@@ -2,9 +2,6 @@
 
 Iniciação Científica — Engenharia Elétrica — UFMG. Orientador: Prof. Vitor Ângelo.
 
-> Guia de consulta completo, com fórmulas, justificativas e perguntas prováveis:
-> **[`docs/guia_reuniao.pdf`](docs/guia_reuniao.pdf)**
-
 ---
 
 ## Resumo (modelo IEEE)
@@ -53,17 +50,11 @@ Esta pasta junta **dois trabalhos que eu já tinha feito e testado** e mostra a 
 | `c_modular/*` | minha MLP modular | nenhuma |
 | `modelo/exportado/*` | gerado pelo meu `python/exporta_modelo.py` | nenhuma |
 
-`montar_pasta.sh` confere o md5 de cada código contra a versão testada.
-
 ## 3. Estrutura
 
 ```
 neon_na_mlp/
 ├── README.md                     este arquivo
-├── docs/
-│   ├── guia_reuniao.pdf          guia completo (A5, para celular)
-│   └── guia_reuniao.tex          fonte LaTeX do guia
-├── montar_pasta.sh               monta a pasta a partir do projeto e confere os md5
 ├── rodar_tudo.sh                 compila, executa tudo e grava resultados/
 ├── c_modular/                    MLP modular: float32, int16, int8 e orquestrador (x86 ou ARM)
 ├── c_neon/
