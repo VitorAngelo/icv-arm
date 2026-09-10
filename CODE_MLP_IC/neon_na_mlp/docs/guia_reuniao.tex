@@ -1,0 +1,577 @@
+% =============================================================================
+% guia_reuniao.tex - Guia de consulta rapida: NEON aplicado a MLP int8.
+% Formato A5 em coluna unica, para leitura no celular. Compilar com pdfLaTeX.
+% Todos os resultados vem das execucoes registradas em ../resultados/.
+% =============================================================================
+\documentclass[10pt]{article}
+\usepackage[a5paper, margin=1.3cm, top=1.4cm, bottom=1.6cm]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[brazilian]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+
+\setlist{nosep, leftmargin=1.2em}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45em}
+\renewcommand{\arraystretch}{1.12}
+\setlength{\emergencystretch}{2.5em}
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}
+
+\definecolor{caixa}{gray}{0.93}
+\newcommand{\destaque}[1]{\par\smallskip\colorbox{caixa}{\parbox{\dimexpr\linewidth-2\fboxsep}{#1}}\par\smallskip}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize, columns=fullflexible, frame=single,
+  breaklines=true, showstringspaces=false, keepspaces=true,
+  literate={á}{{\'a}}1 {é}{{\'e}}1 {í}{{\'i}}1 {ó}{{\'o}}1 {ú}{{\'u}}1 {ã}{{\~a}}1 {õ}{{\~o}}1 {ç}{{\c{c}}}1 {ê}{{\^e}}1 {â}{{\^a}}1 {ô}{{\^o}}1 {à}{{\`a}}1
+}
+
+\begin{document}
+
+\begin{center}
+{\Large\bfseries Guia da reunião}\\[0.3em]
+{\large NEON aplicado à MLP int8 (784$\to$64$\to$10, MNIST)}\\[0.4em]
+Davi --- Iniciação Científica, Engenharia Elétrica, UFMG\\
+Orientador: Prof. Vitor Ângelo --- 10/09/2026
+\end{center}
+
+\tableofcontents
+
+% =============================================================================
+\section{O que foi feito, em uma página}
+
+\begin{enumerate}
+\item \textbf{MLP modular (já pronta):} inferência em C nas versões float32, int16 e int8, validada
+      bit a bit contra o Python (\texttt{c\_modular/}).
+\item \textbf{NEON (já pronto):} produto escalar int8 com intrinsics, validado na placa nos meus
+      experimentos anteriores (\texttt{origem/}).
+\item \textbf{Trabalho novo:} apliquei o kernel NEON, sem alterar o corpo, às duas camadas da MLP int8, sem
+      alterar a MLP (\texttt{c\_neon/}), e validei a correção e a medição.
+\end{enumerate}
+
+\destaque{\textbf{Resultados principais (medidos):}\\
+Acurácia: float32 0,9708; int16 0,9725; int8 escalar 0,9728; int8 NEON 0,9728.\\
+NEON $\times$ escalar: logits idênticos nas 10.000 imagens; matriz de confusão idêntica.\\
+Kernel isolado: 746.785 casos sem nenhuma diferença; reproduz o 576483 da placa.\\
+Desempenho na Raspberry Pi~4: \textbf{ainda não medido} (Seção~\ref{sec:placa}).}
+
+% =============================================================================
+\section{Como rodar}
+
+Requisitos (Linux ou WSL em PC x86):
+\begin{lstlisting}
+sudo apt install -y gcc make gcc-aarch64-linux-gnu \
+     binutils-aarch64-linux-gnu qemu-user
+\end{lstlisting}
+
+Tudo de uma vez (grava as saídas em \texttt{resultados/}):
+\begin{lstlisting}
+bash rodar_tudo.sh
+\end{lstlisting}
+
+Ou etapa por etapa:
+\begin{lstlisting}
+cd c_modular && make && ./orquestrador todos    # x86 nativo
+cd ../c_neon && make                            # compila p/ ARM
+make testar-kernel     # kernel NEON x escalar   (QEMU)
+make validar-mlp       # MLP NEON x escalar x Python
+make verificar-asm     # instruções NEON geradas
+make ensaiar-bench     # benchmark curto (emulação)
+\end{lstlisting}
+
+Na placa (medição de desempenho):
+\begin{lstlisting}
+./teste_dot_i8_neon ../modelo/exportado
+./valida_mlp_int8_neon ../modelo/exportado
+./bench_mlp_int8_neon 3 10000 3 21   # núcleo imagens runs trials
+\end{lstlisting}
+
+\textbf{Por que QEMU?} O NEON só existe em ARM. O QEMU executa o binário ARM no PC reproduzindo cada
+instrução exatamente: serve para provar a \emph{correção}. O tempo no QEMU é o custo da emulação, não
+do Cortex-A72: \emph{não} serve para desempenho.
+
+% =============================================================================
+\section{O modelo}
+
+\subsection{Dados}
+MNIST: imagens de dígitos 28$\times$28 em tons de cinza (0 a 255), achatadas em 784 valores. Divisão
+canônica: 60.000 imagens de treino e 10.000 de teste. O teste nunca foi usado para ajustar nada.
+
+\subsection{Padronização (StandardScaler)}
+\[
+x_i = \frac{\text{pixel}_i - \text{média}_i}{\text{desvio}_i}
+\]
+Média e desvio de cada pixel calculados no treino. Pixels sempre apagados (desvio zero) recebem
+desvio 1. Serve para colocar as entradas na mesma escala e facilitar o treino.
+
+\subsection{Rede}
+\[
+a_j = b_{0,j} + \sum_{i=1}^{784} W_{0,ji}\, x_i,\qquad
+h_j = \max(a_j, 0),\qquad
+z_k = b_{1,k} + \sum_{j=1}^{64} W_{1,kj}\, h_j
+\]
+\begin{itemize}
+\item 784 entradas $\to$ 64 neurônios ocultos $\to$ 10 saídas (uma por dígito).
+\item Treino: scikit-learn \texttt{MLPClassifier}: \texttt{activation="relu"}, \texttt{solver="adam"},
+      \texttt{alpha=1e-4} (regularização L2), \texttt{batch\_size=128}, \texttt{learning\_rate\_init=1e-3},
+      \texttt{max\_iter=30}, \texttt{early\_stopping=True} (10\% do treino para validação, para após 5
+      épocas sem melhora), \texttt{random\_state=42}.
+\end{itemize}
+
+\subsection{Por que ReLU}
+$\mathrm{ReLU}(a)=\max(a,0)$.
+\begin{itemize}
+\item É a ativação padrão de redes densas: barata e sem saturação para valores positivos, o que
+      ajuda o gradiente no treino.
+\item Em inteiros custa só uma comparação.
+\item Funciona com quantização: para escala $s>0$, $\max(0, s\,A) = s\max(0, A)$. A ReLU pode
+      ser aplicada direto no acumulador inteiro, sem voltar ao float.
+\end{itemize}
+
+\subsection{Por que não há softmax na inferência}
+No treino, a saída usa softmax e entropia cruzada. Na inferência só importa a classe:
+\[
+\mathrm{softmax}(z)_k = \frac{e^{z_k}}{\sum_j e^{z_j}}
+\]
+é crescente em $z_k$ e tem o mesmo denominador para todas as classes. Logo
+$\arg\max_k \mathrm{softmax}(z)_k = \arg\max_k z_k$. A classe é o índice do maior logit; em
+empate, vence o menor índice.
+
+% =============================================================================
+\section{Quantização e ponto fixo}
+
+\subsection{Ideia}
+Cada valor real $T$ vira um inteiro $T_q$ e uma escala $s$:
+\[
+T \approx s\,T_q,\qquad T_q = \mathrm{clip}\big(\mathrm{round}(T/s),\,-127,\,127\big).
+\]
+\begin{itemize}
+\item \textbf{Simétrica:} o zero real vira o inteiro 0, sem deslocamento (\emph{zero point}). A
+      multiplicação fica simples: $(s_a a_q)(s_b b_q) = s_a s_b\,(a_q b_q)$.
+\item \textbf{Por tensor:} uma escala por matriz; é a forma mais simples.
+\item \textbf{Faixa $[-127,127]$:} simétrica; o $-128$ não é usado.
+\end{itemize}
+
+\subsection{Escalas}
+\begin{center}\footnotesize
+\begin{tabularx}{\linewidth}{@{}l L l@{}}
+\toprule
+Escala & Como é calculada & Valor \\
+\midrule
+$s_{W0}$ & $\max|W_0|/127$ & 0,0045042 \\
+$s_{W1}$ & $\max|W_1|/127$ & 0,0050596 \\
+$s_x$ & percentil 99,9 de $|x|$ em 5.000 imagens de treino / 127 & 0,063711 \\
+$s_h$ & percentil 99,9 de $|h|$ em 5.000 imagens de treino / 127 & 0,13930 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{Por que percentil 99,9 nas ativações e não o máximo?} Alguns pixels quase nunca acendem no
+treino e têm desvio muito pequeno; quando acendem, a entrada padronizada fica enorme (até 419,6
+desvios no teste). Usar o máximo desperdiçaria quase toda a faixa do int8 com esses casos raros.
+O percentil recorta os extremos (limite de 8,09 desvios) e preserva a resolução dos valores comuns.
+
+\subsection{Como o C calcula sem nenhum float}
+\begin{enumerate}
+\item \textbf{Entrada por tabela:} \texttt{x = MLP8\_LUT[i*256 + pixel]}. A tabela
+      (784$\times$256) guarda padronização, quantização e recorte já calculados. Como cada pixel só
+      tem 256 valores, é exata.
+\item \textbf{Camada oculta:} \texttt{A = MLP8\_B0[j] + soma(x * W0)}, em int32. O bias foi
+      pré-escalado: $B_0 = \mathrm{round}(b_0/(s_x s_{W0}))$, para ficar na mesma unidade da soma.
+\item \textbf{ReLU e requantização:}
+      \[h = \min\big((\max(A,0)\cdot M + 2^{N-1}) \gg N,\ 127\big)\]
+      com $M/2^N \approx s_x s_{W0}/s_h$, $M = 1.132.510.016$ e $N = 39$. O termo $2^{N-1}$ faz
+      arredondar em vez de truncar. O produto é feito em int64.
+\item \textbf{Saída:} \texttt{Z = MLP8\_B1[k] + soma(h * W1)}. Não precisa requantizar: a escala
+      $s_h s_{W1}$ é positiva e igual nas 10 classes, então o argmax não muda.
+\end{enumerate}
+
+\textbf{Exemplo:} pixel central (índice 406) aceso (255): média 130,267, desvio 113,727, logo
+$x = 1{,}0968$ desvios e $x/s_x = 17{,}21$, e a tabela guarda 17. Acumulador $A=10.000$:
+$(10.000\cdot M + 2^{38})\gg 39 = 21$, contra o valor real $10.000\cdot s_x s_{W0}/s_h = 20{,}60$.
+
+\textbf{Por que int16?} Controle de precisão: mesmo método do int8, trocando 127 por 32767. Se o int8
+estivesse errado, o int16 se afastaria dele. O acumulador int16 chega a $7{,}9\times10^9$ e por isso
+usa int64.
+
+% =============================================================================
+\section{O kernel NEON}
+
+\begin{lstlisting}
+int32_t dot_i8_neon(const int8_t *a, const int8_t *b, int len)
+{
+  int32x4_t acc = vdupq_n_s32(0);
+  for (int i = 0; i < len; i += 16) {
+    int8x16_t va = vld1q_s8(a + i);
+    int8x16_t vb = vld1q_s8(b + i);
+    acc = vpadalq_s16(acc, vmull_s8(vget_low_s8(va),
+                                    vget_low_s8(vb)));
+    acc = vpadalq_s16(acc, vmull_s8(vget_high_s8(va),
+                                    vget_high_s8(vb)));
+  }
+  int32x2_t s = vadd_s32(vget_low_s32(acc),
+                         vget_high_s32(acc));
+  return vget_lane_s32(vpadd_s32(s, s), 0);
+}
+\end{lstlisting}
+
+\begin{center}\footnotesize
+\begin{tabularx}{\linewidth}{@{}l L@{}}
+\toprule
+Intrinsic & O que faz \\
+\midrule
+\texttt{vld1q\_s8} & carrega 16 bytes num registrador de 128 bits \\
+\texttt{vget\_low/high\_s8} & separa as metades de 8 elementos \\
+\texttt{vmull\_s8} & multiplica 8 pares int8 e dá 8 resultados int16 (instrução \texttt{smull}) \\
+\texttt{vpadalq\_s16} & soma os int16 em pares, alarga para int32 e acumula nos 4 acumuladores (\texttt{sadalp}) \\
+\texttt{vadd}, \texttt{vpadd}, \texttt{vget\_lane} & somam os 4 acumuladores e devolvem um int32 \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\begin{itemize}
+\item \textbf{Por que alargar:} $127\times127 = 16.129$ e $(-128)^2 = 16.384$ não cabem em int8,
+      mas cabem em int16. A soma de 784 produtos cabe em int32.
+\item \textbf{16 elementos por iteração:} um registrador de 128 bits guarda 16 int8.
+\item \textbf{Restrição:} o tamanho deve ser múltiplo de 16 (não há tratamento de sobra). Na MLP,
+      784 = 16$\times$49 e 64 = 16$\times$4.
+\item \textbf{Cortex-A72 é ARMv8.0:} não tem \texttt{vdotq\_s32} (extensão ARMv8.2). Por isso se usa
+      \texttt{smull} com \texttt{sadalp}.
+\item \textbf{Por que manual:} no meu relatório anterior, o GCC vetorizava o laço escalar com 6
+      instruções por bloco (\texttt{smull} + \texttt{saddw}); o manual usa 4 (\texttt{smull} + \texttt{sadalp}).
+\end{itemize}
+
+% =============================================================================
+\section{Integração na MLP}
+
+\begin{itemize}
+\item \texttt{mlp\_int8\_neon.c} repete o pipeline de \nolinkurl{c_modular/mlp_int8.c} e troca só os
+      dois laços de produto escalar:
+\begin{lstlisting}
+A = MLP8_B0[j] + dot_i8_neon(x, &MLP8_W0[j*784], 784);
+Z = MLP8_B1[k] + dot_i8_neon(h, &MLP8_W1[k*64], 64);
+\end{lstlisting}
+\item \textbf{Pesos contíguos:} as matrizes estão guardadas com uma linha por neurônio
+      (\texttt{W0[j*784+i]}), então cada neurônio já é um vetor contíguo.
+\item \textbf{Bias fora do kernel:} soma inteira, o resultado não depende da ordem.
+\item \textbf{Nada existente foi alterado:} o corpo do kernel é o mesmo de
+      \nolinkurl{homogeneidade_v2.c}, e \texttt{mlp\_int8.c} tem o mesmo md5 (\texttt{e8476fde}).
+\end{itemize}
+
+% =============================================================================
+\section{Como os resultados foram medidos e por quê}
+
+\subsection{Correção: comparação bit a bit}
+\textbf{Como:} a mesma imagem passa pela versão escalar e pela NEON, e cada valor é comparado
+exatamente: entrada quantizada, produto, produto + bias, ReLU, ativação $h$, logits e classe. Os
+logits também são comparados com a referência gerada em Python (\texttt{ref\_int8.bin}).
+
+\textbf{Por quê:}
+\begin{itemize}
+\item \textbf{Igualdade é o esperado:} a aritmética é inteira e sem estouro, então qualquer diferença,
+      por menor que seja, é erro.
+\item \textbf{A acurácia sozinha esconde erros.} Exemplo com os meus números: float32 e int8 diferem
+      em só 20 acertos (9708 contra 9728), mas tomam \textbf{47 decisões diferentes}. Duas versões com
+      acurácia parecida podem classificar imagens diferentes.
+\item \textbf{Localiza a falha:} a comparação por estágio mostra exatamente onde uma divergência começa.
+\end{itemize}
+
+\textbf{Kernel isolado:} antes da MLP, o kernel é testado sozinho contra o escalar e contra a soma
+exata em 64 bits, em tamanhos múltiplos de 16, casos extremos, desalinhamento de memória, o vetor
+da placa (576483) e os vetores reais das duas camadas.
+
+\subsection{Acurácia e matriz de confusão}
+\begin{itemize}
+\item \textbf{Acurácia:} acertos / 10.000.
+\item \textbf{Matriz de confusão:} célula [real][previsto] conta quantas imagens do dígito real foram
+      classificadas como o previsto; a diagonal são os acertos. Mostra \emph{quais} dígitos a rede
+      confunde (ex.: 2 com 8, 4 com 9).
+\item \textbf{Precisão da classe $k$:} dos que a rede chamou de $k$, quantos eram $k$.
+\item \textbf{Revocação da classe $k$:} dos que eram $k$, quantos a rede reconheceu.
+\item \textbf{F1:} média harmônica de precisão e revocação.
+\end{itemize}
+\textbf{Por quê:} matriz idêntica entre NEON e escalar confirma, célula a célula, que as decisões
+são as mesmas.
+
+\subsection{Tempo no orquestrador (x86, só indicativo)}
+\textbf{Como:} \nolinkurl{c_modular/orquestrador.c} cronometra cada inferência com
+\texttt{CLOCK\_MONOTONIC} e reporta a média por imagem numa passagem pelas 10.000 imagens, sem
+fixar núcleo nem aquecer.
+
+\textbf{Por quê:} o objetivo do orquestrador é validar. O tempo dá só uma ordem de grandeza em x86 e
+varia entre execuções (o float mediu 30 µs numa e 42 µs noutra). \textbf{Não vale para a placa.}
+
+\subsection{Tempo no benchmark NEON (método do professor)}
+\nolinkurl{c_neon/bench_mlp_int8_neon.c} segue a metodologia de
+\nolinkurl{origem/experimentos_neon_2/homogeneidade_v2.c}:
+
+\begin{center}\footnotesize
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{0.34\linewidth} L@{}}
+\toprule
+Decisão & Justificativa \\
+\midrule
+Fixar a thread em um núcleo (\texttt{pthread\_setaffinity\_np}) & evita que o sistema migre o processo e perca a cache; no Orange Pi os núcleos são diferentes. No Pi 4 os núcleos se mostraram homogêneos (spread de 0,0\% em \texttt{homogeneidade\_v2}), mas fixar mantém as condições iguais \\
+Carregar as imagens na RAM antes & leitura de arquivo é lenta e variável; não é inferência \\
+Aquecer (1 passagem inicial e 1 inferência antes de cada bloco) & a primeira execução paga falhas de página, cache fria e a subida de frequência da CPU \\
+\texttt{CLOCK\_PROCESS\_CPUTIME\_ID} & conta só o tempo de CPU do processo; tempo em que outro programa usou a CPU não entra \\
+Cronometrar \texttt{runs} passagens juntas e dividir & uma inferência dura microssegundos; medir blocos grandes dilui o custo do próprio relógio \\
+Vários trials (padrão 21) & uma medição isolada pode pegar interrupção do sistema \\
+Mediana (e média e mínimo) & a mediana ignora picos raros; média muito acima da mediana indica picos \\
+Girar a ordem das variantes a cada trial & \texttt{ordem\_cache.c} mostrou que medir logo depois de outra variante pode favorecer a segunda (razão frio/quente de até 1,46) \\
+Mesmas imagens nas três variantes & comparação justa \\
+Três variantes: escalar puro, autovetorizado e NEON & o GCC com \texttt{-O2} já vetoriza o escalar (confirmado no assembly); sem \texttt{-fno-tree-vectorize} estaríamos comparando NEON manual com NEON automático \\
+Portão de correção e soma de verificação & só mede se as três variantes derem logits idênticos, e confere que o trabalho medido foi o mesmo \\
+Registrar governador, frequência e temperatura & frequência e aquecimento mudam o tempo \\
+Tempo por imagem; \emph{speedup} = mediana do escalar / mediana do NEON & unidade comparável entre execuções \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\textbf{Limitações conhecidas desta medição:}
+\begin{itemize}
+\item todos os trials rodam num único processo;
+\item o argmax e a soma de verificação entram no tempo (igual para as três variantes);
+\item o kernel NEON é chamado por função (74 chamadas por imagem), o que pesa só na variante NEON.
+\end{itemize}
+
+% =============================================================================
+\section{Resultados medidos}
+
+\subsection{MLP modular (x86 nativo, orquestrador)}
+\begin{center}\footnotesize
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+Versão & Acurácia & Bit a bit & Decisões $\neq$ float & Tempo/imagem$^*$ \\
+\midrule
+float32 & 0,9708 & sim & 0 & 29,9 µs \\
+int16 & 0,9725 & sim & 36 & 7,7 µs \\
+int8 & 0,9728 & sim & 47 & 3,2 µs \\
+\bottomrule
+\end{tabular}\\[0.2em]
+{\scriptsize $^*$x86 no WSL, uma passagem; indicativo, não vale para a placa.}
+\end{center}
+O mesmo código compilado para aarch64 e executado no QEMU também valida bit a bit.
+
+\subsection{Matriz de confusão do int8 (idêntica no NEON)}
+\begin{center}\footnotesize
+\setlength{\tabcolsep}{3.2pt}
+\begin{tabular}{@{}c|rrrrrrrrrr@{}}
+real$\backslash$prev. & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 \\
+\midrule
+0 & \textbf{968} & 1 & 2 & 0 & 0 & 1 & 4 & 2 & 2 & 0 \\
+1 & 0 & \textbf{1125} & 3 & 0 & 0 & 1 & 2 & 1 & 3 & 0 \\
+2 & 3 & 2 & \textbf{995} & 7 & 4 & 0 & 3 & 4 & 13 & 1 \\
+3 & 1 & 0 & 3 & \textbf{982} & 0 & 7 & 1 & 6 & 5 & 5 \\
+4 & 0 & 0 & 9 & 1 & \textbf{959} & 0 & 4 & 1 & 3 & 5 \\
+5 & 3 & 0 & 1 & 13 & 3 & \textbf{857} & 4 & 0 & 9 & 2 \\
+6 & 3 & 3 & 4 & 1 & 5 & 5 & \textbf{935} & 0 & 2 & 0 \\
+7 & 1 & 4 & 14 & 3 & 4 & 0 & 0 & \textbf{991} & 3 & 8 \\
+8 & 3 & 2 & 2 & 4 & 4 & 3 & 3 & 3 & \textbf{948} & 2 \\
+9 & 3 & 4 & 1 & 5 & 12 & 1 & 0 & 5 & 10 & \textbf{968} \\
+\end{tabular}
+\end{center}
+Maiores confusões: 7$\to$2 (14), 5$\to$3 (13), 2$\to$8 (13), 9$\to$4 (12). A pior classe é o 8
+(precisão 0,9499), e a melhor, o 1 (F1 0,9886). A média macro do F1 é 0,9726.
+
+\subsection{Kernel NEON isolado (aarch64 no QEMU)}
+\begin{center}\footnotesize
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Grupo & Casos & Diferenças \\
+\midrule
+Vetor da placa (576483) & 1 & 0 \\
+Tamanhos 16 a 4096 (múltiplos de 16) & 5.120 & 0 \\
+Extremos e impulsos (784 e 64) & 864 & 0 \\
+Desalinhamento de memória & 800 & 0 \\
+Vetores reais, camada 784$\to$64 & 640.000 & 0 \\
+Vetores reais, camada 64$\to$10 & 100.000 & 0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{MLP int8 com NEON (aarch64 no QEMU)}
+\begin{center}\footnotesize
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Comparação nas 10.000 imagens & Valores & Diferenças \\
+\midrule
+Entrada quantizada & 7.840.000 & 0 \\
+Produto, produto+bias, ReLU, $h$ (cada) & 640.000 & 0 \\
+Logits & 100.000 & 0 \\
+Classe prevista & 10.000 & 0 \\
+Logits NEON $\times$ escalar (c\_modular) & 100.000 & 0 \\
+Logits NEON $\times$ Python & 100.000 & 0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+Acurácia 0,9728 nas duas versões; 0 classificações divergentes.
+
+\subsection{Código gerado (GCC 15, \texttt{make verificar-asm})}
+\begin{center}\footnotesize
+\begin{tabularx}{\linewidth}{@{}l L@{}}
+\toprule
+Objeto & Instruções NEON \\
+\midrule
+escalar puro (\texttt{-fno-tree-vectorize}) & nenhuma \\
+\texttt{mlp\_int8.c} com \texttt{-O2} & 2 \texttt{smull}, 2 \texttt{smull2}, 4 \texttt{saddw}, 4 \texttt{saddw2} (vetorizado pelo GCC) \\
+kernel manual & 2 \texttt{smull}, 2 \texttt{sadalp} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% =============================================================================
+\section{Expectativas para a placa (hipóteses)}
+\label{sec:placa}
+
+\textbf{Correção: expectativa forte.} Mesmos logits bit a bit, acurácia 0,9728 e 0 divergências. A
+aritmética é inteira e o mesmo binário ARM já validou no QEMU. Primeiro passo na placa: rodar
+\texttt{teste\_dot\_i8\_neon} e \texttt{valida\_mlp\_int8\_neon}.
+
+\textbf{Desempenho: hipóteses a medir.}
+\begin{itemize}
+\item \textbf{Kernel isolado, experimentos anteriores na placa:} \texttt{regimes\_memoria} deu 5 a 6$\times$
+      (dados no L1D e no L2). \texttt{homogeneidade\_v2} deu 2,2$\times$ (mediana). Nesse último os flags
+      não foram registrados, e o escalar levou 0,45 ns por elemento, rápido demais para um laço sem
+      vetorização: provavelmente comparou NEON manual com escalar já vetorizado.
+\item \textbf{Na MLP o ganho deve ser menor}, porque parte do tempo não é produto escalar: 784 leituras
+      da tabela, 64 requantizações e 74 chamadas por imagem. Pela lei de Amdahl, com fração $f$ do
+      tempo no produto escalar e kernel $S$ vezes mais rápido, $\text{speedup} = 1/((1-f)+f/S)$:
+\end{itemize}
+\begin{center}\footnotesize
+\begin{tabular}{@{}cccc@{}}
+\toprule
+$f$ \textbackslash{} $S$ & 1,5$\times$ & 2,2$\times$ & 5,5$\times$ \\
+\midrule
+0,80 & 1,36 & 1,77 & 2,89 \\
+0,90 & 1,43 & 1,96 & 3,79 \\
+0,95 & 1,46 & 2,08 & 4,49 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{itemize}
+\item \textbf{Faixas esperadas:} NEON contra escalar puro, de 3 a 4,5$\times$; NEON contra autovetorizado,
+      de 1,3 a 2$\times$, ou menos se as chamadas de função pesarem.
+\item \textbf{Memória:} os pesos da camada 1 (49 KB) e a tabela (200 KB) cabem no L2 de 1 MB do
+      Cortex-A72, regime em que o kernel manteve speedup alto.
+\end{itemize}
+
+% =============================================================================
+\section{Propostas de medição (próximos passos)}
+
+Não fazem parte dos resultados acima; são análises propostas para dar mais rigor.
+
+\subsection{Intervalo de confiança de Wilson (acurácia)}
+\textbf{O que é:} 10.000 imagens são uma amostra; se fossem outras 10.000, a acurácia mudaria um
+pouco. O intervalo de 95\% dá a faixa plausível da acurácia verdadeira. O método de Wilson é o
+recomendado para proporções próximas de 1.\\
+\textbf{Com os meus números:} int8 0,9728 com intervalo [0,9694; 0,9758], cerca de $\pm$0,3 ponto
+percentual. Diferenças menores que isso entre dois modelos não podem ser afirmadas só olhando as
+acurácias.
+
+\subsection{Teste de McNemar (comparar dois modelos)}
+\textbf{O que é:} olha só as imagens em que os modelos discordam: $b$ = só o modelo B acerta;
+$c$ = só o A acerta. Se os dois fossem igualmente bons, cada discordância seria uma moeda
+justa. O teste diz a probabilidade $p$ de um desequilíbrio igual ou maior acontecer por acaso.\\
+\textbf{Por que serve:} os dois modelos são avaliados nas \emph{mesmas} imagens, e comparar as
+acurácias separadamente ignora isso.\\
+\textbf{Com os meus números} (o orquestrador já imprime): float $\times$ int8, 30 contra 10,
+$p=0{,}0022$; int16 $\times$ int8, 7 contra 4, $p=0{,}55$ (compatível com o acaso).
+
+\subsection{Correção de Bonferroni}
+\textbf{O que é:} com o limiar de 5\%, cada teste tem 5\% de chance de dar ``significativo'' por
+acaso. Fazendo muitos testes, isso se acumula. A correção divide o limiar pelo número de testes: com
+10 testes, exige $p<0{,}005$.
+
+\subsection{Ablação do recorte (análise preliminar)}
+Acrescentando uma transformação por vez ao modelo float: só o recorte da entrada muda a acurácia de
+forma relevante (0,9708 $\to$ 0,9725). O float recortado toma as mesmas decisões do int16. Isso
+sugere que o int8 acerta um pouco mais que o float por causa do recorte, e não da quantização.
+Precisa ser confirmado com mais sementes de treino.
+
+\subsection{Para o benchmark}
+\begin{itemize}
+\item \textbf{Repetir o programa várias vezes (ex.: 5):} mede a variação entre execuções, e não só
+      entre trials.
+\item \textbf{Intervalo da mediana por \emph{bootstrap}:} reamostrar os trials para obter a faixa
+      plausível da mediana e do speedup.
+\item \textbf{Medir também o kernel isolado} em 64, 784 e 16.384 elementos, para comparar com a MLP
+      inteira e com os experimentos anteriores.
+\item \textbf{Testar entradas fora do MNIST} (ruído, imagens invertidas, deslocadas) na validação.
+\item \textbf{Kernel \texttt{inline}:} eliminar as 74 chamadas por imagem sem mudar o corpo.
+\end{itemize}
+
+% =============================================================================
+\section{Glossário de variáveis e arquivos}
+
+\begin{center}\footnotesize
+\begin{tabularx}{\linewidth}{@{}>{\ttfamily\raggedright\arraybackslash}p{0.33\linewidth} L@{}}
+\toprule
+\normalfont Nome & Significado \\
+\midrule
+x, a (A), h, z (Z) & entrada, pré-ativação (acumulador), ativação após ReLU, logit \\
+s\_x, s\_W0, s\_h, s\_W1 & escalas de quantização (só existem no Python) \\
+MLP8\_LUT[i*256+p] & entrada $i$ quantizada para o pixel de valor $p$ \\
+MLP8\_W0[j*784+i] & peso int8 da entrada $i$ para o neurônio $j$ \\
+MLP8\_B0[j] & bias int32 do neurônio $j$ (unidade $s_x s_{W0}$) \\
+MLP8\_W1[k*64+j] & peso int8 do neurônio $j$ para a classe $k$ \\
+MLP8\_B1[k] & bias int32 da classe $k$ (unidade $s_h s_{W1}$) \\
+MLP8\_M, MLP8\_N & $M/2^N \approx s_x s_{W0}/s_h$ (requantização) \\
+MLP8\_LIM & 127, limite do int8 \\
+MLPF\_MEDIA, MLPF\_ESCALA & média e desvio do StandardScaler (float) \\
+teste\_u8.bin & 10.000 registros: 1 byte de rótulo + 784 pixels \\
+ref\_int8.bin & logits int32 esperados, gerados em Python \\
+dot\_i8\_neon / dot\_i8\_ref & produto escalar NEON / escalar \\
+mlp\_int8\_inferir & inferência int8 escalar (c\_modular) \\
+mlp\_int8\_neon\_inferir & inferência int8 com NEON (c\_neon) \\
+runs, trials & passagens por bloco cronometrado; repetições da medição \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% =============================================================================
+\section{Perguntas prováveis}
+
+\textbf{Usou ReLU?} Sim, na camada oculta (\texttt{activation="relu"}). Na saída não há ativação na
+inferência: a classe é o argmax dos logits.
+
+\textbf{E a softmax?} Só no treino (entropia cruzada). Não muda o argmax.
+
+\textbf{Por que int8 e simétrica?} int8 é o menor tipo com multiplicação vetorizada eficiente em NEON
+(16 valores por registrador). Simétrica elimina o zero point e simplifica a multiplicação.
+
+\textbf{O que são M e N?} Inteiros que substituem o fator real $s_x s_{W0}/s_h$: multiplicar por $M$ e
+deslocar $N$ bits equivale a multiplicar por 0,00206, sem float.
+
+\textbf{Por que a tabela de entrada?} Evita 784 divisões em float por imagem; é exata porque o
+pixel só tem 256 valores.
+
+\textbf{Por que o int8 acerta mais que o float?} A diferença é de 20 imagens. A análise preliminar
+indica que vem do recorte das entradas extremas, e não da quantização (Seção 10).
+
+\textbf{Como sei que o NEON está certo?} Logits idênticos ao escalar e ao Python em todas as 10.000
+imagens, em cada estágio, e o kernel testado sozinho em 746.785 casos.
+
+\textbf{Por que rodar no QEMU?} Para provar correção sem a placa. O tempo no QEMU não vale.
+
+\textbf{Por que três variantes no benchmark?} O GCC já vetoriza o escalar com \texttt{-O2}; o escalar
+puro exige \texttt{-fno-tree-vectorize}.
+
+\textbf{Por que mediana?} É robusta a picos causados pelo sistema operacional.
+
+\textbf{Por que \texttt{CLOCK\_PROCESS\_CPUTIME\_ID}?} Mede o tempo de CPU do processo e ignora
+o tempo em que outro programa ocupou a CPU; é o método do professor.
+
+\textbf{E se o vetor não for múltiplo de 16?} O kernel leria além do vetor. Na MLP não acontece
+(784 e 64).
+
+\textbf{O que falta?} Validar e medir na Raspberry Pi~4 e depois otimizar (kernel \texttt{inline}).
+
+\end{document}

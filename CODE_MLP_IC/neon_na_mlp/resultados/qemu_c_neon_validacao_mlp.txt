@@ -1,0 +1,25 @@
+qemu-aarch64 ./valida_mlp_int8_neon ../modelo/exportado
+==================================================================
+ Validacao: mlp_int8_neon_inferir x escalar (c_modular) x Python
+==================================================================
+
+  comparacao                                          valores  diferencas
+  784->64  entrada quantizada x                       7840000           0   OK
+  784->64  produto W0.x (sem bias)                     640000           0   OK
+  784->64  produto + bias B0                           640000           0   OK
+  784->64  ReLU max(a, 0)                              640000           0   OK
+  784->64  h requantizado (int8)                       640000           0   OK
+  64->10   logits                                      100000           0   OK
+  argmax   classe prevista                              10000           0   OK
+  ----------------------------------------------------------------------
+  logits NEON x mlp_int8_inferir (c_modular)           100000           0   OK
+  logits NEON x ref_int8.bin (Python)                  100000           0   OK
+  autoverificacao: referencia x mlp_int8_inferir       100000           0   OK
+
+  Imagens                         : 10000
+  Acuracia int8 escalar (c_modular): 0.9728 (9728/10000)
+  Acuracia int8 NEON               : 0.9728 (9728/10000)
+  Classificacoes divergentes       : 0
+==================================================================
+ SUCESSO: MLP int8 NEON identica ao escalar e ao Python em todos os estagios.
+==================================================================

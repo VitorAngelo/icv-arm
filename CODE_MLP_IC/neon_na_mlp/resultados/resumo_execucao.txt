@@ -1,0 +1,51 @@
+RESUMO DA EXECUCAO - 2026-09-10 13:51:45
+
+[c_modular, x86 nativo]
+ COMPARACAO COM O PYTHON ORIGINAL
+==================================================================
+  modulo  acuracia  liquido  corrige  erra novo  p McNemar  bit a bit  us/imagem  aceleracao
+  python    0.9708        -        -          -          -          -          -           -
+  float     0.9708       +0        0          0     1.0000        sim     59.307       1.00x
+  int16     0.9725      +17       24          7     0.0033        sim     15.155       3.91x
+  int8      0.9728      +20       30         10     0.0022        sim      6.473       9.16x
+
+  Comparacao pareada entre modulos (A x B)
+  par              discordantes  liquido B  B corrige  B erra novo  ambos erram  p McNemar
+  float x int16              36        +17         24            7            5     0.0033
+  float x int8               47        +20         30           10            7     0.0022
+  int16 x int8               14         +3          7            4            3     0.5488
+
+  p McNemar < 0.05: diferenca de acuracia improvavel por acaso; caso contrario, compativel com o acaso.
+==================================================================
+ SUCESSO: todos os modulos executados foram validados.
+==================================================================
+
+[c_neon, aarch64 emulado]
+    dot_i8_neon = 576483   (registrado na placa: 576483)
+  1. resultado da placa (srand(0), 16384 elementos)    casos        1   diferencas 0   OK
+  2. tamanhos 16..4096 (multiplos de 16), aleatorios   casos     5120   diferencas 0   OK
+  3. extremos e impulsos (784 e 64)                    casos      864   diferencas 0   OK
+  4. desalinhamento (16 deslocamentos, len 784)        casos      800   diferencas 0   OK
+  5a. MLP camada 784->64 (x real . linhas de MLP8_W0)  casos   640000   diferencas 0   OK
+  5b. MLP camada 64->10 (h real . linhas de MLP8_W1)   casos   100000   diferencas 0   OK
+ SUCESSO: dot_i8_neon identico a referencia em todos os casos.
+  784->64  entrada quantizada x                       7840000           0   OK
+  784->64  produto W0.x (sem bias)                     640000           0   OK
+  784->64  produto + bias B0                           640000           0   OK
+  784->64  ReLU max(a, 0)                              640000           0   OK
+  784->64  h requantizado (int8)                       640000           0   OK
+  64->10   logits                                      100000           0   OK
+  argmax   classe prevista                              10000           0   OK
+  logits NEON x mlp_int8_inferir (c_modular)           100000           0   OK
+  logits NEON x ref_int8.bin (Python)                  100000           0   OK
+  autoverificacao: referencia x mlp_int8_inferir       100000           0   OK
+  Acuracia int8 escalar (c_modular): 0.9728 (9728/10000)
+  Acuracia int8 NEON               : 0.9728 (9728/10000)
+  Classificacoes divergentes       : 0
+ SUCESSO: MLP int8 NEON identica ao escalar e ao Python em todos os estagios.
+
+dot_i8_ref.o           0 instrucoes NEON
+dot_i8_neon.o           1 add  2 addp  3 mov  2 movi  2 sadalp  2 smull 
+mlp_int8_escalar.o     0 instrucoes NEON
+mlp_int8_autovet.o      2 addv  2 movi  4 saddw  4 saddw2  2 smull  2 smull2 
+mlp_int8_neon.o        0 instrucoes NEON

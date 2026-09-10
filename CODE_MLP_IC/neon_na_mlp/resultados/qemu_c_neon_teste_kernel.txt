@@ -1,0 +1,14 @@
+qemu-aarch64 ./teste_dot_i8_neon ../modelo/exportado
+==================================================================
+ Teste isolado: dot_i8_neon x dot_i8_ref (int8 x int8 -> int32)
+==================================================================
+    dot_i8_neon = 576483   (registrado na placa: 576483)
+  1. resultado da placa (srand(0), 16384 elementos)    casos        1   diferencas 0   OK
+  2. tamanhos 16..4096 (multiplos de 16), aleatorios   casos     5120   diferencas 0   OK
+  3. extremos e impulsos (784 e 64)                    casos      864   diferencas 0   OK
+  4. desalinhamento (16 deslocamentos, len 784)        casos      800   diferencas 0   OK
+  5a. MLP camada 784->64 (x real . linhas de MLP8_W0)  casos   640000   diferencas 0   OK
+  5b. MLP camada 64->10 (h real . linhas de MLP8_W1)   casos   100000   diferencas 0   OK
+==================================================================
+ SUCESSO: dot_i8_neon identico a referencia em todos os casos.
+==================================================================

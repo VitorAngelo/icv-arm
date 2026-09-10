@@ -1,0 +1,14 @@
+rm -f teste_dot_i8_neon valida_mlp_int8_neon bench_mlp_int8_neon *.o *.tmp
+aarch64-linux-gnu-gcc -I. -I../c_modular -I../modelo/exportado -std=c11 -O2 -march=armv8-a+simd -Wall -Wextra -Wpedantic -ffp-contract=off -c -o dot_i8_neon.o dot_i8_neon.c
+aarch64-linux-gnu-gcc -I. -I../c_modular -I../modelo/exportado -std=c11 -O2 -march=armv8-a+simd -Wall -Wextra -Wpedantic -ffp-contract=off -fno-tree-vectorize -c -o dot_i8_ref.o dot_i8_ref.c
+aarch64-linux-gnu-gcc -I. -I../c_modular -I../modelo/exportado -std=c11 -O2 -march=armv8-a+simd -Wall -Wextra -Wpedantic -ffp-contract=off -static -o teste_dot_i8_neon teste_dot_i8_neon.c dot_i8_neon.o dot_i8_ref.o
+aarch64-linux-gnu-gcc -I. -I../c_modular -I../modelo/exportado -std=c11 -O2 -march=armv8-a+simd -Wall -Wextra -Wpedantic -ffp-contract=off -c -o mlp_int8_neon.o mlp_int8_neon.c
+aarch64-linux-gnu-gcc -I. -I../c_modular -I../modelo/exportado -std=c11 -O2 -march=armv8-a+simd -Wall -Wextra -Wpedantic -ffp-contract=off -c -o mlp_int8_modular.o ../c_modular/mlp_int8.c
+aarch64-linux-gnu-gcc -I. -I../c_modular -I../modelo/exportado -std=c11 -O2 -march=armv8-a+simd -Wall -Wextra -Wpedantic -ffp-contract=off -static -o valida_mlp_int8_neon valida_mlp_int8_neon.c mlp_int8_neon.o mlp_int8_modular.o dot_i8_neon.o dot_i8_ref.o
+aarch64-linux-gnu-gcc -I. -I../c_modular -I../modelo/exportado -std=c11 -O2 -march=armv8-a+simd -Wall -Wextra -Wpedantic -ffp-contract=off -fno-tree-vectorize -c -o mlp_int8_escalar.o.tmp ../c_modular/mlp_int8.c
+aarch64-linux-gnu-objcopy --redefine-sym mlp_int8_inferir=mlp_int8_escalar_inferir mlp_int8_escalar.o.tmp mlp_int8_escalar.o
+rm -f mlp_int8_escalar.o.tmp
+aarch64-linux-gnu-gcc -I. -I../c_modular -I../modelo/exportado -std=c11 -O2 -march=armv8-a+simd -Wall -Wextra -Wpedantic -ffp-contract=off -c -o mlp_int8_autovet.o.tmp ../c_modular/mlp_int8.c
+aarch64-linux-gnu-objcopy --redefine-sym mlp_int8_inferir=mlp_int8_autovet_inferir mlp_int8_autovet.o.tmp mlp_int8_autovet.o
+rm -f mlp_int8_autovet.o.tmp
+aarch64-linux-gnu-gcc -I. -I../c_modular -I../modelo/exportado -std=c11 -O2 -march=armv8-a+simd -Wall -Wextra -Wpedantic -ffp-contract=off -static -o bench_mlp_int8_neon bench_mlp_int8_neon.c mlp_int8_escalar.o mlp_int8_autovet.o mlp_int8_neon.o dot_i8_neon.o -pthread

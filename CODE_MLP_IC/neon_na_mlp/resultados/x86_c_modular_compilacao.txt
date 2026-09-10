@@ -1,0 +1,6 @@
+rm -f orquestrador *.o
+gcc -I../modelo/exportado -DMLP_COM_INT16 -DMLP_COM_INT8 -std=c11 -O2 -Wall -Wextra -Wpedantic -ffp-contract=off -c -o orquestrador.o orquestrador.c
+gcc -I../modelo/exportado -std=c11 -O2 -Wall -Wextra -Wpedantic -ffp-contract=off -c -o mlp_float.o mlp_float.c
+gcc -I../modelo/exportado -std=c11 -O2 -Wall -Wextra -Wpedantic -ffp-contract=off -c -o mlp_int16.o mlp_int16.c
+gcc -I../modelo/exportado -std=c11 -O2 -Wall -Wextra -Wpedantic -ffp-contract=off -c -o mlp_int8.o mlp_int8.c
+gcc -std=c11 -O2 -Wall -Wextra -Wpedantic -ffp-contract=off  -o orquestrador orquestrador.o mlp_float.o mlp_int16.o mlp_int8.o -lm

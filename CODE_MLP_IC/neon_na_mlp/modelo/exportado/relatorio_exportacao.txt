@@ -1,0 +1,115 @@
+======================================================================
+1. INTEGRIDADE DOS ARTEFATOS
+======================================================================
+[OK]     X_te.bin com 10000 x 784 float32 -> 7840000 valores
+[OK]     y_te.bin com 10000 int32 -> 10000 valores
+[OK]     Pixels inteiros em [0, 255] (conversao para uint8 sem perda) -> min=0.0, max=255.0
+[OK]     Rotulos em [0, 9]
+[OK]     Scaler identico nos dois .npz
+[OK]     Bias float identicos nos dois .npz
+[OK]     Nenhuma escala do scaler nula
+[OK]     Escala W0 = max|W0|/127 -> diferenca relativa 0.00e+00
+[OK]     W0q do .npz = quantizacao de W0 float -> 0 elementos diferentes
+[OK]     Escala W1 = max|W1|/127 -> diferenca relativa 0.00e+00
+[OK]     W1q do .npz = quantizacao de W1 float -> 0 elementos diferentes
+
+======================================================================
+2. CAMINHO FLOAT
+======================================================================
+[OK]     float64 reproduz acc_baseline do scikit-learn -> 9708/10000 (esperado 9708)
+[OK]     Literal C float32 de media ida e volta exato
+[OK]     Literal C float32 de escala ida e volta exato
+[OK]     Literal C float32 de W0 ida e volta exato
+[OK]     Literal C float32 de b0 ida e volta exato
+[OK]     Literal C float32 de W1 ida e volta exato
+[OK]     Literal C float32 de b1 ida e volta exato
+[OK]     float32 decide igual ao float64 -> 0 decisoes diferentes
+
+======================================================================
+3. CAMINHO INT8
+======================================================================
+[OK]     int8: bias b0 cabe em int32 -> max|b0| = 1328
+[OK]     int8: bias b1 cabe em int32 -> max|b1| = 459
+[OK]     int8: W0 reconstruido = W0q do .npz
+[OK]     int8: W1 reconstruido = W1q do .npz
+[OK]     int8 novo decide igual ao int8 do quantiza.py -> 0 decisoes diferentes
+[OK]     int8 novo reproduz acc_int8 do .npz -> 9728/10000 (esperado 9728)
+
+======================================================================
+4. CAMINHO INT16
+======================================================================
+[OK]     int16: bias b0 cabe em int32 -> max|b0| = 88378809
+[OK]     int16: bias b1 cabe em int32 -> max|b1| = 30523033
+
+======================================================================
+5. LIMITES NUMERICOS (teorico = pior caso possivel)
+======================================================================
+[OK]     int8: acumulador oculto teorico cabe em int32 -> teorico 1.265e+07, observado [-119001, 94878]
+[OK]     int8: produto a*M + 2^(N-1) cabe em int64 -> M=1132510016, N=39, teorico 1.432e+16
+[OK]     int8: logit teorico cabe em int32 -> teorico 1.033e+06, observado max|z| = 54295
+         int8: erro relativo de M/2^N = 4.29e-10
+[OK]     int16: acumulador oculto teorico cabe em int64 -> teorico 8.419e+11, observado [-7934057926, 6329033461]
+[OK]     int16: produto a*M + 2^(N-1) cabe em int64 -> M=8778879, N=40, teorico 7.391e+18
+[OK]     int16: logit teorico cabe em int64 -> teorico 6.875e+10, observado max|z| = 3602977076
+         int16: erro relativo de M/2^N = 5.47e-08
+[OK]     int16: produto x*w teorico cabe em int32 -> 1073676289 <= 2147483647
+         int32 transbordaria no int16? observado max|a| = 7934057926 (SIM)
+
+======================================================================
+6. COMPARACAO ENTRE CAMINHOS
+======================================================================
+  Acuracia float64 : 0.9708  (9708/10000)
+  Acuracia float32 : 0.9708  (9708/10000)
+  Acuracia int16   : 0.9725  (9725/10000)
+  Acuracia int8    : 0.9728  (9728/10000)
+  Decisoes diferentes do float64 -> int16: 36   int8: 47
+  Decisoes diferentes int16 x int8: 14
+  RMSE de h vs float64 (inclui recorte)   -> int16: 0.533172   int8: 0.535216
+  RMSE de h vs float recortado (resolucao) -> int16: 0.000178   int8: 0.053328   (razao int8/int16 = 300.3; ideal ~258)
+  Entradas saturadas -> int16: 0.0903%   int8: 0.0910%
+  Ativacoes ocultas saturadas -> int16: 0.0625%   int8: 0.0628%
+  Valores distintos de h -> int16: 25316   int8: 128
+
+  Comparacoes pareadas (McNemar exato; A = primeiro, B = segundo)
+  Python original x int16              liquido  +17 | B corrige  24 | B erra novo   7 | ambos errados  5 | p = 0.0033
+  Python original x int8               liquido  +20 | B corrige  30 | B erra novo  10 | ambos errados  7 | p = 0.0022
+  int16 x int8                         liquido   +3 | B corrige   7 | B erra novo   4 | ambos errados  3 | p = 0.5488
+
+  Efeito isolado do recorte (float64, sem nenhuma quantizacao)
+  Limiar da entrada: 8.0913 desvios-padrao | maior entrada padronizada no teste: 419.6
+  Imagens com ao menos uma entrada recortada: 2491/10000
+  Acuracia float64 com recorte da entrada           : 0.9725
+  Acuracia float64 com recorte da entrada e oculta  : 0.9725
+  Python original x float64 recortado  liquido  +17 | B corrige  24 | B erra novo   7 | ambos errados  5 | p = 0.0033
+  float64 recortado x int16            liquido   +0 | B corrige   0 | B erra novo   0 | ambos errados  0 | p = 1.0000
+  float64 recortado x int8             liquido   +3 | B corrige   7 | B erra novo   4 | ambos errados  3 | p = 0.5488
+
+  Ablacao do int8 (cada etapa x etapa anterior; McNemar exato)
+  etapa                              acuracia discord. corrige erra novo       p
+  0 modelo Python original             0.9708        -       -         -       -
+  1 + recorte da entrada               0.9725       36      24         7  0.0033
+  2 + pesos e bias int8                0.9723       11       4         6  0.7539
+  3 + entrada int8 (tabela)            0.9728       13       8         3  0.2266
+  4 + ativacao oculta int8 = int8      0.9728        7       3         3  1.0000
+  A pesos int8, sem recorte            0.9704       13       4         8  0.3877
+  A = prever_float do testar_acuracia.c antigo; comparado com a etapa 0.
+
+[OK]     Alarme A: int16 diverge do float64 menos que o int8 -> int16=36, int8=47
+[OK]     Alarme B: int16 usa mais de 128 niveis de ativacao -> 25316 niveis distintos
+[OK]     Alarme B: erro de resolucao do int16 ao menos 10x menor que o do int8 -> razao = 300.3
+
+======================================================================
+7. ARQUIVOS GERADOS
+======================================================================
+  mlp_pesos_float.h          998717 bytes
+  mlp_pesos_int16.h         1688173 bytes
+  mlp_pesos_int8.h          1131326 bytes
+  teste_u8.bin              7850000 bytes
+  ref_float32.bin            400000 bytes
+  ref_int16.bin              800000 bytes
+  ref_int8.bin               400000 bytes
+  ref_python_pred.bin         10000 bytes
+
+======================================================================
+RESULTADO: todas as verificacoes fatais passaram.
+======================================================================
