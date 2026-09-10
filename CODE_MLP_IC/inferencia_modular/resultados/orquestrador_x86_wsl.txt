@@ -1,0 +1,240 @@
+==================================================================
+ Python original: float64, equivalente ao predict do scikit-learn
+==================================================================
+  Amostras : 10000
+  Acuracia : 0.9708 (9708/10000)
+
+  Matriz de confusao (linhas = classe real, colunas = classe prevista)
+  real |     0     1     2     3     4     5     6     7     8     9 | total
+  -----+-------------------------------------------------------------+------
+     0 |   965     1     2     0     0     1     6     3     2     0 |   980
+     1 |     0  1123     4     1     0     1     2     1     3     0 |  1135
+     2 |     3     2   994    11     3     0     1     4    13     1 |  1032
+     3 |     1     0     3   983     0     7     1     5     7     3 |  1010
+     4 |     0     0    11     1   954     0     6     2     3     5 |   982
+     5 |     3     0     1    13     3   857     3     0    10     2 |   892
+     6 |     4     3     4     1     5     4   935     0     2     0 |   958
+     7 |     1     4    13     4     4     0     0   988     3    11 |  1028
+     8 |     3     2     2     4     4     3     3     4   947     2 |   974
+     9 |     3     4     2     7    13     1     0     7    10   962 |  1009
+
+  Metricas por classe
+  classe  suporte  previstos  precisao  revocacao      F1
+       0      980        983    0.9817     0.9847  0.9832
+       1     1135       1139    0.9860     0.9894  0.9877
+       2     1032       1036    0.9595     0.9632  0.9613
+       3     1010       1025    0.9590     0.9733  0.9661
+       4      982        986    0.9675     0.9715  0.9695
+       5      892        874    0.9805     0.9608  0.9706
+       6      958        957    0.9770     0.9760  0.9765
+       7     1028       1014    0.9744     0.9611  0.9677
+       8      974       1000    0.9470     0.9723  0.9595
+       9     1009        986    0.9757     0.9534  0.9644
+  media macro                     0.9708     0.9706  0.9706
+  media ponderada                 0.9709     0.9708  0.9708
+==================================================================
+ Modulo float: float32 (pesos originais)
+==================================================================
+  Amostras                           : 10000
+  Acuracia                           : 0.9708 (9708/10000)
+  Diferenca vs Python original       : +0.0000 (+0 amostras)
+  Logits diferentes da referencia    : 0
+  Decisoes diferentes da referencia  : 0
+  Decisoes diferentes do Python      : 0
+    Python errava, modulo acerta     : 0
+    Python acertava, modulo erra     : 0
+    ambos erram (classes diferentes) : 0
+    p-valor McNemar exato            : 1.0000 (compativel com o acaso a 5%)
+  Tempo de inferencia (medio)        : 29.937 us/imagem
+  Tempo de inferencia (min / max)    : 26.971 / 1344.423 us
+  Vazao                              : 33403.1 imagens/s
+
+  Matriz de confusao (linhas = classe real, colunas = classe prevista)
+  real |     0     1     2     3     4     5     6     7     8     9 | total
+  -----+-------------------------------------------------------------+------
+     0 |   965     1     2     0     0     1     6     3     2     0 |   980
+     1 |     0  1123     4     1     0     1     2     1     3     0 |  1135
+     2 |     3     2   994    11     3     0     1     4    13     1 |  1032
+     3 |     1     0     3   983     0     7     1     5     7     3 |  1010
+     4 |     0     0    11     1   954     0     6     2     3     5 |   982
+     5 |     3     0     1    13     3   857     3     0    10     2 |   892
+     6 |     4     3     4     1     5     4   935     0     2     0 |   958
+     7 |     1     4    13     4     4     0     0   988     3    11 |  1028
+     8 |     3     2     2     4     4     3     3     4   947     2 |   974
+     9 |     3     4     2     7    13     1     0     7    10   962 |  1009
+
+  Diferenca da matriz: modulo - Python original ('.' = igual)
+  real |     0     1     2     3     4     5     6     7     8     9
+  -----+------------------------------------------------------------
+     0 |     .     .     .     .     .     .     .     .     .     .
+     1 |     .     .     .     .     .     .     .     .     .     .
+     2 |     .     .     .     .     .     .     .     .     .     .
+     3 |     .     .     .     .     .     .     .     .     .     .
+     4 |     .     .     .     .     .     .     .     .     .     .
+     5 |     .     .     .     .     .     .     .     .     .     .
+     6 |     .     .     .     .     .     .     .     .     .     .
+     7 |     .     .     .     .     .     .     .     .     .     .
+     8 |     .     .     .     .     .     .     .     .     .     .
+     9 |     .     .     .     .     .     .     .     .     .     .
+  Celulas alteradas: 0 (na diagonal, positivo = mais acertos)
+
+  Metricas por classe (dF1 = F1 do modulo - F1 do Python original)
+  classe  suporte  previstos  precisao  revocacao      F1      dF1
+       0      980        983    0.9817     0.9847  0.9832  +0.0000
+       1     1135       1139    0.9860     0.9894  0.9877  +0.0000
+       2     1032       1036    0.9595     0.9632  0.9613  +0.0000
+       3     1010       1025    0.9590     0.9733  0.9661  +0.0000
+       4      982        986    0.9675     0.9715  0.9695  +0.0000
+       5      892        874    0.9805     0.9608  0.9706  +0.0000
+       6      958        957    0.9770     0.9760  0.9765  +0.0000
+       7     1028       1014    0.9744     0.9611  0.9677  +0.0000
+       8      974       1000    0.9470     0.9723  0.9595  +0.0000
+       9     1009        986    0.9757     0.9534  0.9644  +0.0000
+  media macro                     0.9708     0.9706  0.9706
+  media ponderada                 0.9709     0.9708  0.9708
+
+  Resultado float: VALIDADO (bit a bit)
+==================================================================
+ Modulo int16: int16 (produto 32 bits, acumulacao 64 bits)
+==================================================================
+  Amostras                           : 10000
+  Acuracia                           : 0.9725 (9725/10000)
+  Diferenca vs Python original       : +0.0017 (+17 amostras)
+  Logits diferentes da referencia    : 0
+  Decisoes diferentes da referencia  : 0
+  Decisoes diferentes do Python      : 36
+    Python errava, modulo acerta     : 24
+    Python acertava, modulo erra     : 7
+    ambos erram (classes diferentes) : 5
+    p-valor McNemar exato            : 0.0033 (diferenca significativa a 5%)
+  Tempo de inferencia (medio)        : 7.704 us/imagem
+  Tempo de inferencia (min / max)    : 6.201 / 2133.204 us
+  Vazao                              : 129794.6 imagens/s
+
+  Matriz de confusao (linhas = classe real, colunas = classe prevista)
+  real |     0     1     2     3     4     5     6     7     8     9 | total
+  -----+-------------------------------------------------------------+------
+     0 |   968     1     2     0     0     1     4     2     2     0 |   980
+     1 |     0  1124     3     1     0     1     2     1     3     0 |  1135
+     2 |     3     1   996     7     4     0     3     4    13     1 |  1032
+     3 |     1     0     3   982     0     7     1     6     6     4 |  1010
+     4 |     0     0    10     1   958     0     4     1     3     5 |   982
+     5 |     3     0     1    12     3   857     4     0    10     2 |   892
+     6 |     4     3     4     1     6     4   934     0     2     0 |   958
+     7 |     1     4    14     4     4     0     0   990     3     8 |  1028
+     8 |     3     2     2     4     4     3     3     3   948     2 |   974
+     9 |     3     4     1     5    12     1     0     5    10   968 |  1009
+
+  Diferenca da matriz: modulo - Python original ('.' = igual)
+  real |     0     1     2     3     4     5     6     7     8     9
+  -----+------------------------------------------------------------
+     0 |    +3     .     .     .     .     .    -2    -1     .     .
+     1 |     .    +1    -1     .     .     .     .     .     .     .
+     2 |     .    -1    +2    -4    +1     .    +2     .     .     .
+     3 |     .     .     .    -1     .     .     .    +1    -1    +1
+     4 |     .     .    -1     .    +4     .    -2    -1     .     .
+     5 |     .     .     .    -1     .     .    +1     .     .     .
+     6 |     .     .     .     .    +1     .    -1     .     .     .
+     7 |     .     .    +1     .     .     .     .    +2     .    -3
+     8 |     .     .     .     .     .     .     .    -1    +1     .
+     9 |     .     .    -1    -2    -1     .     .    -2     .    +6
+  Celulas alteradas: 32 (na diagonal, positivo = mais acertos)
+
+  Metricas por classe (dF1 = F1 do modulo - F1 do Python original)
+  classe  suporte  previstos  precisao  revocacao      F1      dF1
+       0      980        986    0.9817     0.9878  0.9847  +0.0016
+       1     1135       1139    0.9868     0.9903  0.9886  +0.0009
+       2     1032       1036    0.9614     0.9651  0.9632  +0.0019
+       3     1010       1017    0.9656     0.9723  0.9689  +0.0028
+       4      982        991    0.9667     0.9756  0.9711  +0.0016
+       5      892        874    0.9805     0.9608  0.9706  +0.0000
+       6      958        955    0.9780     0.9749  0.9765  -0.0000
+       7     1028       1012    0.9783     0.9630  0.9706  +0.0029
+       8      974       1000    0.9480     0.9733  0.9605  +0.0010
+       9     1009        990    0.9778     0.9594  0.9685  +0.0041
+  media macro                     0.9725     0.9722  0.9723
+  media ponderada                 0.9726     0.9725  0.9725
+
+  Resultado int16: VALIDADO (bit a bit)
+==================================================================
+ Modulo int8: int8 (produto 16 bits, acumulacao 32 bits)
+==================================================================
+  Amostras                           : 10000
+  Acuracia                           : 0.9728 (9728/10000)
+  Diferenca vs Python original       : +0.0020 (+20 amostras)
+  Logits diferentes da referencia    : 0
+  Decisoes diferentes da referencia  : 0
+  Decisoes diferentes do Python      : 47
+    Python errava, modulo acerta     : 30
+    Python acertava, modulo erra     : 10
+    ambos erram (classes diferentes) : 7
+    p-valor McNemar exato            : 0.0022 (diferenca significativa a 5%)
+  Tempo de inferencia (medio)        : 3.168 us/imagem
+  Tempo de inferencia (min / max)    : 2.545 / 605.194 us
+  Vazao                              : 315622.9 imagens/s
+
+  Matriz de confusao (linhas = classe real, colunas = classe prevista)
+  real |     0     1     2     3     4     5     6     7     8     9 | total
+  -----+-------------------------------------------------------------+------
+     0 |   968     1     2     0     0     1     4     2     2     0 |   980
+     1 |     0  1125     3     0     0     1     2     1     3     0 |  1135
+     2 |     3     2   995     7     4     0     3     4    13     1 |  1032
+     3 |     1     0     3   982     0     7     1     6     5     5 |  1010
+     4 |     0     0     9     1   959     0     4     1     3     5 |   982
+     5 |     3     0     1    13     3   857     4     0     9     2 |   892
+     6 |     3     3     4     1     5     5   935     0     2     0 |   958
+     7 |     1     4    14     3     4     0     0   991     3     8 |  1028
+     8 |     3     2     2     4     4     3     3     3   948     2 |   974
+     9 |     3     4     1     5    12     1     0     5    10   968 |  1009
+
+  Diferenca da matriz: modulo - Python original ('.' = igual)
+  real |     0     1     2     3     4     5     6     7     8     9
+  -----+------------------------------------------------------------
+     0 |    +3     .     .     .     .     .    -2    -1     .     .
+     1 |     .    +2    -1    -1     .     .     .     .     .     .
+     2 |     .     .    +1    -4    +1     .    +2     .     .     .
+     3 |     .     .     .    -1     .     .     .    +1    -2    +2
+     4 |     .     .    -2     .    +5     .    -2    -1     .     .
+     5 |     .     .     .     .     .     .    +1     .    -1     .
+     6 |    -1     .     .     .     .    +1     .     .     .     .
+     7 |     .     .    +1    -1     .     .     .    +3     .    -3
+     8 |     .     .     .     .     .     .     .    -1    +1     .
+     9 |     .     .    -1    -2    -1     .     .    -2     .    +6
+  Celulas alteradas: 33 (na diagonal, positivo = mais acertos)
+
+  Metricas por classe (dF1 = F1 do modulo - F1 do Python original)
+  classe  suporte  previstos  precisao  revocacao      F1      dF1
+       0      980        985    0.9827     0.9878  0.9852  +0.0021
+       1     1135       1141    0.9860     0.9912  0.9886  +0.0009
+       2     1032       1034    0.9623     0.9641  0.9632  +0.0019
+       3     1010       1016    0.9665     0.9723  0.9694  +0.0033
+       4      982        991    0.9677     0.9766  0.9721  +0.0026
+       5      892        875    0.9794     0.9608  0.9700  -0.0005
+       6      958        956    0.9780     0.9760  0.9770  +0.0005
+       7     1028       1013    0.9783     0.9640  0.9711  +0.0034
+       8      974        998    0.9499     0.9733  0.9615  +0.0020
+       9     1009        991    0.9768     0.9594  0.9680  +0.0036
+  media macro                     0.9728     0.9725  0.9726
+  media ponderada                 0.9729     0.9728  0.9728
+
+  Resultado int8 : VALIDADO (bit a bit)
+
+==================================================================
+ COMPARACAO COM O PYTHON ORIGINAL
+==================================================================
+  modulo  acuracia  liquido  corrige  erra novo  p McNemar  bit a bit  us/imagem  aceleracao
+  python    0.9708        -        -          -          -          -          -           -
+  float     0.9708       +0        0          0     1.0000        sim     29.937       1.00x
+  int16     0.9725      +17       24          7     0.0033        sim      7.704       3.89x
+  int8      0.9728      +20       30         10     0.0022        sim      3.168       9.45x
+
+  Comparacao pareada entre modulos (A x B)
+  par              discordantes  liquido B  B corrige  B erra novo  ambos erram  p McNemar
+  float x int16              36        +17         24            7            5     0.0033
+  float x int8               47        +20         30           10            7     0.0022
+  int16 x int8               14         +3          7            4            3     0.5488
+
+  p McNemar < 0.05: diferenca de acuracia improvavel por acaso; caso contrario, compativel com o acaso.
+==================================================================
+ SUCESSO: todos os modulos executados foram validados.
+==================================================================

@@ -1,0 +1,535 @@
+================================================================================
+RELATÓRIO TÉCNICO
+Inferência de uma MLP 784-64-10 (MNIST) em C modular, nas representações
+float32, int16 e int8, preparada para ARM Cortex-A72 (Raspberry Pi 4)
+
+Iniciação Científica - Engenharia Elétrica - UFMG
+Orientador: Prof. Vitor Ângelo
+Aluno: Davi
+Data: 10/09/2026
+================================================================================
+
+SUMÁRIO
+   1. Objetivo
+   2. Como executar (início rápido)
+   3. Estrutura do repositório
+   4. O que foi feito
+   5. O modelo e a origem de cada peso
+   6. Quantização em ponto fixo
+   7. Método de validação
+   8. Resultados (x86-64, WSL)
+   9. Interpretação dos resultados
+  10. Comparação com a implementação anterior (testar_acuracia.c)
+  11. Limitações
+  12. Reprodução da exportação (opcional, requer Python)
+  13. Execução em ARM
+  14. Próximos passos
+
+
+================================================================================
+1. OBJETIVO
+================================================================================
+
+Executar em C a inferência de uma rede neural densa treinada em Python
+(scikit-learn), em três representações numéricas:
+
+  float32  referência, com os pesos originais;
+  int16    quantizada, usada como controle de precisão;
+  int8     quantizada, alvo da aceleração com instruções NEON no Cortex-A72.
+
+Requisitos que guiaram a implementação:
+
+  - os caminhos inteiros não usam ponto flutuante em tempo de execução;
+  - o conjunto de teste é lido em streaming (uma imagem por vez);
+  - cada módulo é validado bit a bit contra uma especificação gerada em
+    Python, e não apenas pela acurácia;
+  - as diferenças de acurácia são avaliadas com teste estatístico pareado.
+
+
+================================================================================
+2. COMO EXECUTAR (INÍCIO RÁPIDO)
+================================================================================
+
+Requisitos: Linux ou WSL com gcc e make. Não é preciso Python para compilar e
+executar o orquestrador; os pesos e as referências já estão nesta pasta.
+Ambiente testado: Ubuntu 26.04 LTS (WSL), GCC 15.2.0.
+
+Repositório: https://github.com/VitorAngelo/icv-arm
+Pasta deste trabalho: CODE_MLP_IC/inferencia_modular/
+
+  Primeira vez:
+    git clone https://github.com/VitorAngelo/icv-arm.git
+    cd icv-arm/CODE_MLP_IC/inferencia_modular/c_modular
+
+  Se o repositório já estiver clonado:
+    cd icv-arm
+    git pull
+    cd CODE_MLP_IC/inferencia_modular/c_modular
+
+  Depois:
+    make
+    ./orquestrador todos
+
+Se gcc ou make faltarem (Ubuntu/Debian):
+
+  sudo apt install -y build-essential
+
+Saída esperada (tabela final; os tempos variam com a máquina):
+
+  modulo  acuracia  liquido  corrige  erra novo  p McNemar  bit a bit
+  python    0.9708        -        -          -          -          -
+  float     0.9708       +0        0          0     1.0000        sim
+  int16     0.9725      +17       24          7     0.0033        sim
+  int8      0.9728      +20       30         10     0.0022        sim
+
+  e, ao final: "SUCESSO: todos os modulos executados foram validados."
+
+Uso do orquestrador:
+
+  ./orquestrador <modulo> [n_amostras] [dir_dados]
+    modulo       float | int16 | int8 | todos
+    n_amostras   quantas imagens processar (padrão: todas as 10.000)
+    dir_dados    pasta com teste_u8.bin e ref_*.bin
+                 (padrão: ../modelo/exportado)
+
+  Exemplos:
+    ./orquestrador int8                 só o módulo int8
+    ./orquestrador todos 1000           três módulos, primeiras 1.000 imagens
+    ./orquestrador todos | tee ../resultados/execucao.txt   salva o relatório
+
+  Código de saída: 0 = todos os logits idênticos à referência;
+                   1 = divergência ou erro de leitura;
+                   2 = uso incorreto.
+
+  Atalhos do Makefile: "make validar" compila e executa todos os módulos;
+  "make clean" remove o binário e os objetos.
+
+Como ler o relatório impresso por módulo:
+
+  Logits diferentes da referencia    deve ser 0. Prova que o C calcula
+                                     exatamente o que o Python especificou.
+  Decisoes diferentes do Python      imagens em que o módulo escolhe outra
+                                     classe que o modelo Python original.
+    Python errava, modulo acerta     erros do original corrigidos.
+    Python acertava, modulo erra     erros novos introduzidos.
+    p-valor McNemar exato            ver seção 7.3.
+  Matriz de confusao                 célula [real][previsto]; diagonal = acertos.
+  Diferenca da matriz                módulo menos Python original.
+  Precisao / revocacao / F1          por classe; dF1 = F1 do módulo menos F1
+                                     do Python original.
+  Tempo de inferencia                mede só a chamada de inferência.
+
+
+================================================================================
+3. ESTRUTURA DA PASTA
+================================================================================
+
+Esta pasta (CODE_MLP_IC/inferencia_modular/) é autocontida: traz uma cópia dos
+artefatos exatamente como foram usados, para que os resultados sejam
+reproduzíveis sem depender de versões das pastas vizinhas.
+
+  CODE_MLP_IC/
+    c/                       implementação anterior (testar_acuracia.c)
+    python/                  pipeline original: treino.py, referencia_float.py,
+                             quantiza.py e scripts anteriores
+    modelo/, resultados/     artefatos e saídas da versão anterior
+    inferencia_modular/      ESTE TRABALHO:
+
+  RELATORIO.txt              este documento
+  README.md                  resumo e início rápido
+  .gitignore, .gitattributes binários ignorados; finais de linha LF
+
+  c_modular/                 implementação em C
+    mlp.h                    interface, glossário de variáveis e matemática
+    mlp_float.c              inferência float32 (referência)
+    mlp_int16.c              inferência int16 (sem ponto flutuante)
+    mlp_int8.c               inferência int8 (sem ponto flutuante)
+    orquestrador.c           validação, métricas, estatística e tempo
+    Makefile                 compilação (flags comentadas)
+
+  modelo/
+    pesos_float.npz          pesos originais do scikit-learn (Etapa 1)
+    pesos_int8.npz           escalas e pesos int8 (Etapa 3)
+    mlp_mnist.joblib         Pipeline treinado (scikit-learn)
+    X_te.bin.gz              imagens de teste em float32, comprimidas
+    y_te.bin                 rótulos de teste (int32)
+    exportado/               gerado por python/exporta_modelo.py
+      mlp_pesos_float.h      pesos float32 (com comentários de origem)
+      mlp_pesos_int16.h      tabela, pesos e constantes int16
+      mlp_pesos_int8.h       tabela, pesos e constantes int8
+      teste_u8.bin           10.000 registros [rótulo][784 pixels] (uint8)
+      ref_float32.bin        logits esperados do módulo float  (10000x10 f4)
+      ref_int16.bin          logits esperados do módulo int16  (10000x10 i8)
+      ref_int8.bin           logits esperados do módulo int8   (10000x10 i4)
+      ref_python_pred.bin    classe prevista pelo modelo Python original
+      relatorio_exportacao.txt  verificações feitas na exportação
+
+  python/
+    exporta_modelo.py        Etapa 5: gera modelo/exportado/ (só NumPy)
+                             (as Etapas 1 a 3 estão em ../python/)
+
+  resultados/
+    orquestrador_x86_wsl.txt saída completa do orquestrador (seção 8)
+
+
+================================================================================
+4. O QUE FOI FEITO
+================================================================================
+
+4.1 Pipeline Python (pré-existente, em CODE_MLP_IC/python/)
+  Etapa 1  treino.py: Pipeline(StandardScaler, MLPClassifier(64, relu)) no
+           MNIST, divisão canônica 60.000 treino / 10.000 teste.
+           Acurácia no teste: 0,9708.
+  Etapa 2  referencia_float.py: a fórmula manual reproduz o predict do
+           scikit-learn em todas as 10.000 imagens.
+  Etapa 3  quantiza.py: quantização simétrica por tensor. Escalas dos pesos
+           pelo máximo absoluto; escalas das ativações pelo percentil 99,9,
+           calibradas em 5.000 imagens de TREINO.
+
+4.2 Problemas identificados na implementação C anterior
+  a) O caminho "int8" usava ponto flutuante por imagem (padronização,
+     roundf e reconstrução da ativação), o que acionaria a FPU no ARM.
+  b) A "referência float" não era o modelo original (ver seção 10).
+  c) Todo o teste (31 MB em float32) era carregado com um único malloc.
+  d) Código monolítico; validação apenas por acurácia.
+
+4.3 Nova implementação
+  - Exportador (python/exporta_modelo.py): usa só NumPy sobre os artefatos
+    congelados (sem retreinar). Define a especificação exata dos caminhos
+    inteiros, gera os headers, o teste em uint8 (7,85 MB) e as referências
+    de logits.
+  - C modular: um arquivo por representação e um orquestrador que valida
+    tudo em streaming.
+  - Caminhos int16 e int8 sem ponto flutuante: tabela de consulta na entrada
+    e requantização por multiplicador inteiro M e deslocamento N.
+  - Matrizes com uma linha por neurônio, contíguas na memória (pré-requisito
+    do NEON).
+  - int16 acrescentado como controle: mesmo método do int8, com 32767 no
+    lugar de 127, para isolar o efeito da largura de bits.
+  - Validação bit a bit, teste de McNemar e ablação (seção 7).
+
+
+================================================================================
+5. O MODELO E A ORIGEM DE CADA PESO
+================================================================================
+
+Arquitetura: 784 entradas (imagem 28x28) -> 64 neurônios ReLU -> 10 saídas.
+
+  x[i] = (pixel[i] - media[i]) / desvio[i]      padronização
+  a[j] = b0[j] + soma_i W0[j][i] * x[i]          camada oculta
+  h[j] = max(a[j], 0)                            ReLU
+  z[k] = b1[k] + soma_j W1[k][j] * h[j]          logits
+  classe = argmax_k z[k]
+
+Não há softmax: softmax(z)_k = e^z_k / soma_j e^z_j é crescente em z_k e tem
+denominador comum, logo argmax(softmax(z)) = argmax(z).
+
+Origem dos pesos:
+
+  scikit-learn          .npz            forma      nome no C (float)
+  scaler.mean_          scaler_mean     (784,)     MLPF_MEDIA[i]
+  scaler.scale_         scaler_scale    (784,)     MLPF_ESCALA[i]
+  mlp.coefs_[0]         W0              (784,64)   MLPF_W0[j*784 + i]
+  mlp.intercepts_[0]    b0              (64,)      MLPF_B0[j]
+  mlp.coefs_[1]         W1              (64,10)    MLPF_W1[k*64 + j]
+  mlp.intercepts_[1]    b1              (10,)      MLPF_B1[k]
+
+O scikit-learn guarda W0 com uma linha por entrada. No C a matriz é
+transposta: a linha j contém os 784 pesos do neurônio j, contíguos. O desvio
+de pixels com variância zero vale 1 (convenção do scikit-learn).
+
+Cada header em modelo/exportado/ traz no início a fórmula de cada array, os
+valores das escalas e exemplos numéricos. O arquivo c_modular/mlp.h contém
+o glossário completo.
+
+
+================================================================================
+6. QUANTIZAÇÃO EM PONTO FIXO
+================================================================================
+
+6.1 Representação
+  Um valor real T é representado por um inteiro T_q e uma escala real s > 0:
+      T ~= T_q * s,    T_q = clip(round(T / s), -LIM, LIM)
+  LIM = 127 (int8) ou 32767 (int16). Arredondamento: metade para longe de zero.
+
+6.2 Escalas (calculadas só no Python)
+                        int8                         int16
+  s_W0 = max|W0|/LIM    0,0045041641722972803        max|W0|/32767
+  s_W1 = max|W1|/LIM    0,0050595513606356982        max|W1|/32767
+  s_x                   0,063710748089787467         s_x(int8)*127/32767
+  s_h                   0,13930114807917596          s_h(int8)*127/32767
+  s_x e s_h do int8 vêm do percentil 99,9 na calibração (dados de treino). O
+  int16 usa o mesmo limiar de recorte, para que só a largura de bits mude.
+
+6.3 O que o C recebe (apenas inteiros)
+  LUT[i*256 + p]   entrada i, já padronizada, quantizada e recortada, para o
+                   pixel de valor p. Como p só assume 256 valores, a tabela é
+                   a conta exata, não uma aproximação.
+  W0, W1           pesos quantizados.
+  B0 = round(b0 / (s_x*s_W0))   bias na unidade do acumulador.
+  B1 = round(b1 / (s_h*s_W1))   bias na unidade do logit inteiro.
+  M, N             inteiros com M / 2^N ~= s_x*s_W0/s_h.
+
+6.4 Dedução
+  a = soma (W0_q*s_W0)(x_q*s_x) + b0 = (s_x*s_W0) * A,
+  A = soma W0_q*x_q + B0                        (acumulador inteiro)
+
+  ReLU: max(0, (s_x*s_W0)*A) = (s_x*s_W0)*max(0, A), pois a escala é positiva.
+
+  h_q = round(h / s_h) = round(max(A,0) * s_x*s_W0/s_h)
+      = min((max(A,0) * M + 2^(N-1)) >> N, LIM)
+  O termo 2^(N-1) faz o deslocamento arredondar em vez de truncar.
+
+  Saída: z = (s_h*s_W1) * Z, com Z = soma W1_q*h_q + B1. A escala é positiva
+  e comum às 10 classes, logo argmax(z) = argmax(Z): não há requantização.
+
+6.5 Constantes e limites
+                                int8                  int16
+  M                             1.132.510.016         8.778.879
+  N                             39                    40
+  erro relativo de M/2^N        4,29e-10              5,47e-08
+  tipo do produto x*w           int16                 int32
+  tipo do acumulador A          int32                 int64
+  A no pior caso teórico        1,265e+07             8,419e+11
+  A observado no teste          [-119.001, 94.878]    [-7,93e9, 6,33e9]
+  |Z| observado                 54.295                3.602.977.076
+  O acumulador int16 observado ultrapassa o int32 (2,15e9); por isso usa int64.
+  N é o maior deslocamento com M < 2^31 e A_max*M + 2^(N-1) dentro de int64.
+  Todos os limites são verificados no pior caso teórico, não só nos dados.
+
+
+================================================================================
+7. MÉTODO DE VALIDAÇÃO
+================================================================================
+
+7.1 Por que bit a bit, e não pela acurácia
+  Um erro sistemático pode alterar todos os logits sem mudar a acurácia. Em
+  teste preliminar de compilação cruzada para aarch64 executado no QEMU, a
+  omissão de -ffp-contract=off (o compilador funde a*b + c em instruções FMA,
+  com arredondamento diferente) fez os 10.000 logits do módulo float
+  divergirem da referência, com a mesma acurácia. A comparação bit a bit
+  detecta esse tipo de erro; a acurácia não.
+
+7.2 Cadeia de equivalências
+  Elo                                          Resultado
+  scikit-learn -> fórmula float64 manual       10.000/10.000 decisões (Etapa 2)
+  float64 -> acc_baseline gravado no treino    9708/10000 (verificação fatal)
+  float64 -> float32 (simulação do C)          0 decisões diferentes
+  especificação Python -> C float32            logits idênticos bit a bit
+  especificação Python -> C int16              logits idênticos bit a bit
+  especificação Python -> C int8               logits idênticos bit a bit
+  int8 novo -> int8 do quantiza.py             0 decisões diferentes
+  int8 novo -> testar_acuracia.c antigo        matriz de confusão idêntica
+
+7.3 Teste de McNemar exato
+  Compara dois classificadores no mesmo conjunto de teste. Só importam as
+  imagens discordantes: b = só B acerta; c = só A acerta. Se ambos tivessem
+  a mesma taxa de erro, cada discordância seria uma moeda justa:
+      p = 2 * P(X <= min(b, c)),   X ~ Binomial(b + c, 1/2)
+  p < 0,05: a diferença de acurácia dificilmente é acaso. Comparar duas
+  acurácias como amostras independentes ignoraria o pareamento.
+
+7.4 Ablação
+  Partindo do modelo original, cada etapa acrescenta uma única transformação
+  e é comparada à anterior. Pesos e entradas quantizados são reconstruídos
+  em float (T_q * s) para isolar o efeito de cada quantização.
+
+7.5 Separação do conjunto de teste
+  Scaler, pesos, parada antecipada e calibração do recorte usam só dados de
+  treino. As 10.000 imagens de teste não participaram de nenhum ajuste.
+
+
+================================================================================
+8. RESULTADOS (x86-64, UBUNTU 26.04 NO WSL, GCC 15.2.0, -O2)
+================================================================================
+
+8.1 Validação e acurácia
+  módulo   acurácia  acertos  bit a bit  vs Python  corrige  erra novo  p
+  python   0,9708    9708     -          -          -        -          -
+  float    0,9708    9708     sim        0          0        0          1,0000
+  int16    0,9725    9725     sim        +17        24       7          0,0033
+  int8     0,9728    9728     sim        +20        30       10         0,0022
+
+8.2 Comparação entre módulos
+  par             discordantes  líquido B  B corrige  B erra novo  p
+  float x int16   36            +17        24         7            0,0033
+  float x int8    47            +20        30         10           0,0022
+  int16 x int8    14            +3         7          4            0,5488
+
+8.3 Ablação do int8 (cada etapa x etapa anterior)
+  etapa                                acurácia discord. corrige erra  p
+  0 modelo Python original             0,9708   -        -       -     -
+  1 + recorte da entrada               0,9725   36       24      7     0,0033
+  2 + pesos e bias int8                0,9723   11       4       6     0,7539
+  3 + entrada int8 (tabela)            0,9728   13       8       3     0,2266
+  4 + ativação oculta int8 (= int8)    0,9728   7        3       3     1,0000
+  A pesos int8, sem recorte            0,9704   13       4       8     0,3877
+    (A = "referência float" do testar_acuracia.c, comparada com a etapa 0)
+
+8.4 Recorte da entrada
+  Limiar de recorte: 8,09 desvios-padrão (= 127 * s_x).
+  Maior entrada padronizada no teste: 419,6 desvios-padrão.
+  Imagens com ao menos uma entrada recortada: 2.491 de 10.000.
+  float64 com o mesmo recorte e sem quantização: 0,9725, com decisões
+  idênticas às do int16 nas 10.000 imagens.
+
+8.5 Erro das ativações ocultas (RMSE)
+                                        int16      int8
+  contra o float original (com recorte) 0,533172   0,535216
+  contra o float recortado (resolução)  0,000178   0,053328
+  Razão int8/int16 do erro de resolução: 300,3 (ideal teórico ~258).
+  Níveis distintos de ativação usados: int16 25.316; int8 128.
+
+8.6 Tempo de inferência (apenas referência, ver 11)
+  float 29,9 us/imagem; int16 7,7 us/imagem; int8 3,2 us/imagem.
+
+
+================================================================================
+9. INTERPRETAÇÃO DOS RESULTADOS
+================================================================================
+
+1) A implementação em C está correta: os três módulos reproduzem a
+   especificação bit a bit, e o float coincide com o modelo do scikit-learn.
+
+2) O único efeito significativo sobre a acurácia é o recorte da entrada
+   (+17 imagens, p = 0,0033). O StandardScaler divide cada pixel pelo seu
+   desvio-padrão; pixels quase sempre apagados no treino têm desvio pequeno,
+   e um traço nessa região vira um valor muito grande (até 419,6 desvios).
+   O recorte em 8,09 limita essa influência. O float64 recortado, sem
+   nenhuma quantização, toma exatamente as mesmas decisões do int16.
+
+3) A quantização não tem custo mensurável:
+   - int16: nenhuma decisão muda em relação ao float recortado;
+   - int8: as etapas 2 a 4 mudam poucas decisões, todas com p > 0,2.
+
+4) O int8 não é "melhor" que o int16: a diferença de 3 imagens em 14
+   discordâncias é compatível com o acaso (p = 0,5488).
+
+5) Consequência para medir a perda por quantização: a referência correta é o
+   float com recorte (0,9725), não o modelo original (0,9708). Comparar com o
+   original atribuiria à quantização um ganho que pertence ao pré-processamento.
+
+
+================================================================================
+10. COMPARAÇÃO COM A IMPLEMENTAÇÃO ANTERIOR (CODE_MLP_IC/c/testar_acuracia.c)
+================================================================================
+
+A análise refere-se à versão de testar_acuracia.c usada durante este
+trabalho; alterações posteriores naquela pasta não foram consideradas.
+
+10.1 O que estava correto e foi mantido
+  - ReLU seguida de argmax, sem softmax (correto pela monotonicidade).
+  - Produto int8 x int8 acumulado em int32, com bias pré-escalado por
+    round(b / (s_x*s_W0)).
+  - Camada de saída sem requantização; argmax com comparação estrita.
+  O int8 antigo e o novo produzem a mesma matriz de confusão.
+
+10.2 O que foi corrigido
+  Aspecto                 anterior                        atual
+  "Referência float"      pesos int8 reconvertidos,       modelo original
+                          sem recorte: 0,9704             (0,9708) e ablação
+  Conclusão possível      "int8 supera o float"           ganho atribuído ao
+                                                          recorte, com teste
+  Float no caminho int8   784 divisões e roundf por       nenhum: tabela e M/N
+                          imagem, e float por neurônio
+  Validação               acurácia                        logits bit a bit
+  Arredondamento          roundf em C, np.round em        uma única regra,
+                          Python (regras diferentes)      especificada no Python
+  Memória                 malloc de 31 MB, fread sem      streaming, um registro
+                          verificação                     por vez
+  Disposição dos pesos    i*64 + j (espalhada)            linha por neurônio
+  Header de pesos         const sem static (quebra com    static const, um
+                          mais de um .c)                  header por módulo
+
+  A linha A da ablação (seção 8.3) reproduz o 0,9704 antigo e mostra que ele
+  não difere significativamente do modelo original (p = 0,3877): a
+  "referência" antiga era outro modelo, não o original.
+
+
+================================================================================
+11. LIMITAÇÕES
+================================================================================
+
+1) Um único modelo, uma única semente de treino. O McNemar mede a variação
+   devida à amostragem do teste, não à aleatoriedade do treino. Afirmar que
+   o recorte melhora MLPs em geral exige retreinar com várias sementes.
+2) Múltiplas comparações: o relatório faz cerca de 10 testes. Com correção de
+   Bonferroni (limiar ~0,005), o ganho do recorte (p = 0,0033) continua
+   significativo, por margem pequena.
+3) O percentil 99,9 foi escolhido a priori; outros limiares não foram
+   explorados.
+4) Tempos: medidos em x86-64 no WSL, onde o GCC vetoriza automaticamente os
+   laços inteiros. Não representam o Cortex-A72 e não devem ser usados como
+   resultado de desempenho.
+5) A validação em ARM (seção 13) ainda precisa ser registrada com os pesos
+   finais.
+
+
+================================================================================
+12. REPRODUÇÃO DA EXPORTAÇÃO (OPCIONAL, REQUER PYTHON)
+================================================================================
+
+Regenera modelo/exportado/ a partir dos .npz, sem retreinar. Requer apenas
+NumPy (testado com Python 3.14.4 e NumPy 2.5.3).
+
+  python3 -m venv ~/venvs/mlp_ic
+  source ~/venvs/mlp_ic/bin/activate
+  pip install numpy
+  cd icv-arm/CODE_MLP_IC/inferencia_modular
+  md5sum modelo/exportado/* > /tmp/antes.md5
+  gunzip -k modelo/X_te.bin.gz
+  python3 python/exporta_modelo.py
+  md5sum -c /tmp/antes.md5
+
+Esperado: "RESULTADO: todas as verificacoes fatais passaram." e todos os
+arquivos com OK. O relatório completo fica em
+modelo/exportado/relatorio_exportacao.txt.
+Os .npz desta pasta são os mesmos usados nos resultados da seção 8; se os de
+../modelo/ forem de outra versão, os desta pasta prevalecem.
+
+Não execute treino.py para reproduzir estes resultados: outra versão do
+scikit-learn ou da biblioteca de álgebra linear pode gerar pesos diferentes.
+Os artefatos em modelo/ são tratados como congelados.
+
+
+================================================================================
+13. EXECUÇÃO EM ARM
+================================================================================
+
+13.1 Compilação cruzada e validação por emulação (sem a placa)
+  sudo apt install -y gcc-aarch64-linux-gnu qemu-user
+  cd icv-arm/CODE_MLP_IC/inferencia_modular/c_modular
+  aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Wpedantic \
+    -ffp-contract=off -mcpu=cortex-a72 -static \
+    -I../modelo/exportado -DMLP_COM_INT16 -DMLP_COM_INT8 \
+    orquestrador.c mlp_float.c mlp_int16.c mlp_int8.c \
+    -o orquestrador_arm -lm
+  qemu-aarch64 ./orquestrador_arm todos
+
+  Esperado: os mesmos resultados da seção 8.1. Os tempos no QEMU são de
+  emulação e não têm significado.
+
+13.2 Na Raspberry Pi 4
+  Copiar orquestrador_arm e a pasta modelo/exportado/ para a placa,
+  mantendo a estrutura relativa, ou indicar a pasta de dados:
+    ./orquestrador_arm todos 10000 <pasta_com_teste_e_referencias>
+
+  -static evita dependência do ligador dinâmico da placa.
+  -ffp-contract=off é obrigatório para a igualdade bit a bit do float.
+
+
+================================================================================
+14. PRÓXIMOS PASSOS
+================================================================================
+
+1) Registrar a validação em aarch64 (QEMU) e na placa com os pesos finais.
+2) mlp_int8_neon.c: produto escalar com vmull_s8 + vpadalq_s16, validado bit a
+   bit contra o mesmo ref_int8.bin (a aritmética inteira é exata, então a
+   vetorização não altera o resultado).
+3) mlp_int16_neon.c: vmull_s16 + vpadalq_s32.
+4) float NEON: somas vetorizadas mudam a ordem da acumulação; a igualdade bit
+   a bit com a especificação sequencial deixa de valer, e o critério precisa
+   ser redefinido (nova referência ou tolerância).
+5) Medição de desempenho na placa (tempo por imagem, contadores de hardware).
+6) Repetir treino e análise com várias sementes para generalizar a conclusão
+   sobre o recorte.
