@@ -1,0 +1,3 @@
+Copie para esta pasta os 4 arquivos gerados pelo exportador Python
+(CODE_MLP_IC/modelo/exportado/):
+  mlp_pesos_float.h  mlp_pesos_int16.h  mlp_pesos_int8.h  teste_u8.bin
